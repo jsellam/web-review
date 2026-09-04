@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { handleApi, type RouteDeps } from './routes.js';
+import { handleApi, SubmissionConflictError, type RouteDeps } from './routes.js';
 import { serveStatic } from './static.js';
 import type { SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
 
@@ -42,6 +42,10 @@ export interface ServerHandle {
 
 export async function startServer(options: StartOptions): Promise<ServerHandle> {
   let submitted = false;
+  // Set synchronously (before the first `await` in `submit`) alongside the
+  // `submitted`/`submitting` check below, so the guard also covers two
+  // concurrent in-flight POSTs, not just two sequential ones.
+  let submitting = false;
   const waiters = new Set<(value: boolean) => void>();
 
   // Hoisted above createServer (and reassigned after listen) so the request
@@ -64,36 +68,65 @@ export async function startServer(options: StartOptions): Promise<ServerHandle> 
 
   const server: Server = createServer((req, res) => {
     void (async () => {
-      const deps: RouteDeps = {
-        token: options.token,
-        port,
-        getSession: options.getSession,
-        getFile: options.getFile,
-        waitForSubmission,
-        // This server is the single writer for its repository for the lifetime
-        // of one review: server.json plus isServerAlive's liveness check are
-        // what prevent a second server from starting concurrently against the
-        // same repository, so a single in-process `submitted` flag and waiter
-        // set are enough here — no cross-process locking is needed.
-        submit: async (payload) => {
-          await options.onSubmit(payload);
-          submitted = true;
-          for (const waiter of [...waiters]) waiter(true);
-        },
-      };
+      try {
+        const deps: RouteDeps = {
+          token: options.token,
+          port,
+          getSession: options.getSession,
+          getFile: options.getFile,
+          waitForSubmission,
+          // This server is the single writer for its repository for the lifetime
+          // of one review: server.json plus isServerAlive's liveness check are
+          // what prevent a second server process from starting concurrently
+          // against the same repository. Within this process, the
+          // `submitted`/`submitting` guard below is what prevents a second
+          // (sequential or concurrent) POST /api/review from re-applying a
+          // submission to persisted state — no cross-process locking is needed
+          // for either.
+          submit: async (payload) => {
+            if (submitted || submitting) {
+              throw new SubmissionConflictError('a review has already been submitted');
+            }
+            // Checked and set synchronously, with no `await` in between, so
+            // this also wins the race between two concurrent POSTs.
+            submitting = true;
+            try {
+              await options.onSubmit(payload);
+            } catch (error) {
+              // A submission that genuinely failed to persist must remain
+              // retryable, so only a successful submit latches `submitted`.
+              submitting = false;
+              throw error;
+            }
+            submitting = false;
+            submitted = true;
+            for (const waiter of [...waiters]) waiter(true);
+          },
+        };
 
-      if (await handleApi(req, res, deps)) return;
+        if (await handleApi(req, res, deps)) return;
 
-      const response = await serveStatic(
-        options.staticRoot,
-        new URL(req.url ?? '/', `http://127.0.0.1:${port}`).pathname,
-      );
-      res.writeHead(response.status, {
-        'content-type': response.contentType,
-        'content-length': response.body.length,
-        'cache-control': 'no-store',
-      });
-      res.end(response.body);
+        const response = await serveStatic(
+          options.staticRoot,
+          new URL(req.url ?? '/', `http://127.0.0.1:${port}`).pathname,
+        );
+        res.writeHead(response.status, {
+          'content-type': response.contentType,
+          'content-length': response.body.length,
+          'cache-control': 'no-store',
+        });
+        res.end(response.body);
+      } catch {
+        // Defence in depth: handleApi already turns its own route errors into
+        // a JSON response, but a throw outside that path (e.g. a malformed
+        // req.url that `new URL()` cannot parse) would otherwise become an
+        // unhandled rejection with no response ever written, hanging the
+        // client.
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'text/plain' });
+        }
+        res.end('internal server error');
+      }
     })();
   });
 
@@ -155,8 +188,10 @@ export async function isServerAlive(record: ServerRecord): Promise<boolean> {
     return false;
   }
 
+  // Node's fetch always sets Host from the request URL's own authority and
+  // silently ignores an explicit override, so there is no point passing one.
   const response = await fetch(`http://127.0.0.1:${record.port}/api/session`, {
-    headers: { 'x-review-token': record.token, host: `127.0.0.1:${record.port}` },
+    headers: { 'x-review-token': record.token },
   }).catch(() => null);
 
   return response?.ok === true;

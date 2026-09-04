@@ -149,3 +149,76 @@ describe('waitForSubmission', () => {
     expect(await handle.waitForSubmission(50)).toBe(true);
   });
 });
+
+describe('POST /api/review double-submission guard', () => {
+  it('rejects a second sequential submission with 409, onSubmit called exactly once', async () => {
+    const first = await call('/api/review', {
+      method: 'POST',
+      body: JSON.stringify({ verdict: 'approve' }),
+    });
+    const second = await call('/api/review', {
+      method: 'POST',
+      body: JSON.stringify({ verdict: 'approve' }),
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(409);
+    expect(received).toHaveLength(1);
+  });
+
+  it('lets exactly one of two concurrent submissions through', async () => {
+    const [first, second] = await Promise.all([
+      call('/api/review', { method: 'POST', body: JSON.stringify({ verdict: 'approve' }) }),
+      call('/api/review', { method: 'POST', body: JSON.stringify({ verdict: 'approve' }) }),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    expect(received).toHaveLength(1);
+  });
+
+  it('lets a submission be retried after onSubmit rejects, without locking the user out', async () => {
+    let calls = 0;
+    const retryDir = await mkdtemp(join(tmpdir(), 'web-review-server-retry-'));
+    await writeFile(join(retryDir, 'index.html'), '<html>app</html>', 'utf8');
+    const retryReceived: SubmitPayload[] = [];
+
+    const retryHandle = await startServer({
+      staticRoot: retryDir,
+      stateDir: retryDir,
+      port: 0,
+      token,
+      getSession: async () => session,
+      getFile: async () => null,
+      onSubmit: async (payload) => {
+        calls += 1;
+        if (calls === 1) throw new Error('disk full');
+        retryReceived.push(payload);
+      },
+    });
+
+    try {
+      const retryCall = (path: string, init: RequestInit = {}) =>
+        fetch(`http://127.0.0.1:${retryHandle.port}${path}`, {
+          ...init,
+          headers: { 'x-review-token': token, ...(init.headers ?? {}) },
+        });
+
+      const first = await retryCall('/api/review', {
+        method: 'POST',
+        body: JSON.stringify({ verdict: 'approve' }),
+      });
+      const second = await retryCall('/api/review', {
+        method: 'POST',
+        body: JSON.stringify({ verdict: 'approve' }),
+      });
+
+      expect(first.status).toBe(500);
+      expect(second.status).toBe(200);
+      expect(calls).toBe(2);
+      expect(retryReceived).toHaveLength(1);
+    } finally {
+      await retryHandle.close();
+      await rm(retryDir, { recursive: true, force: true });
+    }
+  });
+});

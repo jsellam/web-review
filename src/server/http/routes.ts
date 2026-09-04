@@ -1,8 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isHostAllowed, isTokenValid, TOKEN_HEADER } from './security.js';
-import { validateSubmit } from '../review/request.js';
-import { RequestError } from '../review/request.js';
+import { RequestError, validateSubmit } from '../review/request.js';
 import type { SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
+
+/**
+ * Thrown by RouteDeps.submit when a submission is rejected because one is
+ * already in flight or has already completed. Distinct from RequestError
+ * (a malformed request) so the route layer can map it to 409 instead of 400 —
+ * the request itself was well-formed, it just lost a race or arrived twice.
+ */
+export class SubmissionConflictError extends Error {}
 
 export interface RouteDeps {
   token: string;
@@ -105,7 +112,9 @@ export async function handleApi(
     return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unexpected error';
-    sendJson(res, error instanceof RequestError ? 400 : 500, { error: message });
+    const status =
+      error instanceof RequestError ? 400 : error instanceof SubmissionConflictError ? 409 : 500;
+    sendJson(res, status, { error: message });
     return true;
   }
 }

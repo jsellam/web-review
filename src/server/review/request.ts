@@ -1,14 +1,6 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type {
-  Annotation,
-  NewComment,
-  Reply,
-  ReviewRequest,
-  Side,
-  SubmitPayload,
-  Verdict,
-} from '../../shared/types.js';
+import type { Reply, ReviewRequest, Side, SubmitPayload, Verdict } from '../../shared/types.js';
 
 export const REQUEST_FILE = 'request.json';
 
@@ -46,20 +38,27 @@ function asArray(value: unknown, field: string): unknown[] {
   return value;
 }
 
-function toAnnotation(raw: unknown, index: number): Annotation {
-  const field = `annotations[${index}]`;
-  if (!isRecord(raw)) throw new RequestError(`${field} must be a JSON object`);
+/**
+ * `Annotation` (request.json) and `NewComment` (a submission) are the same four
+ * fields — file, line, side, body — differing only in which list they live in.
+ * One parameterised parser covers both instead of duplicating the field logic.
+ */
+function toLineComment(listField: string) {
+  return (raw: unknown, index: number): { file: string; line: number; side: Side; body: string } => {
+    const field = `${listField}[${index}]`;
+    if (!isRecord(raw)) throw new RequestError(`${field} must be a JSON object`);
 
-  const line = raw['line'];
-  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
-    throw new RequestError(`${field}.line must be an integer >= 1`);
-  }
+    const line = raw['line'];
+    if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+      throw new RequestError(`${field}.line must be an integer >= 1`);
+    }
 
-  return {
-    file: asString(raw['file'], `${field}.file`),
-    line,
-    side: asSide(raw['side'], `${field}.side`),
-    body: asString(raw['body'], `${field}.body`),
+    return {
+      file: asString(raw['file'], `${field}.file`),
+      line,
+      side: asSide(raw['side'], `${field}.side`),
+      body: asString(raw['body'], `${field}.body`),
+    };
   };
 }
 
@@ -80,7 +79,7 @@ export function validateRequest(raw: unknown): ReviewRequest {
   return {
     summary: asString(raw['summary'], 'summary', ''),
     base: asString(raw['base'], 'base', 'auto'),
-    annotations: asArray(raw['annotations'], 'annotations').map(toAnnotation),
+    annotations: asArray(raw['annotations'], 'annotations').map(toLineComment('annotations')),
     replies: asArray(raw['replies'], 'replies').map(toReply),
   };
 }
@@ -130,23 +129,6 @@ function asIdList(value: unknown, field: string): string[] {
   });
 }
 
-function toNewComment(raw: unknown, index: number): NewComment {
-  const field = `newComments[${index}]`;
-  if (!isRecord(raw)) throw new RequestError(`${field} must be a JSON object`);
-
-  const line = raw['line'];
-  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
-    throw new RequestError(`${field}.line must be an integer >= 1`);
-  }
-
-  return {
-    file: asString(raw['file'], `${field}.file`),
-    line,
-    side: asSide(raw['side'], `${field}.side`),
-    body: asString(raw['body'], `${field}.body`),
-  };
-}
-
 /** Validate what the browser POSTs. Same shape of errors as validateRequest. */
 export function validateSubmit(raw: unknown): SubmitPayload {
   if (!isRecord(raw)) throw new RequestError('submission must be a JSON object');
@@ -154,7 +136,7 @@ export function validateSubmit(raw: unknown): SubmitPayload {
   return {
     verdict: asVerdict(raw['verdict']),
     general: asString(raw['general'], 'general', ''),
-    newComments: asArray(raw['newComments'], 'newComments').map(toNewComment),
+    newComments: asArray(raw['newComments'], 'newComments').map(toLineComment('newComments')),
     replies: asArray(raw['replies'], 'replies').map(toReply),
     resolved: asIdList(raw['resolved'], 'resolved'),
     reopened: asIdList(raw['reopened'], 'reopened'),
