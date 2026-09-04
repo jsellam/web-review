@@ -34,4 +34,32 @@ describe('parseFramed', () => {
   it('throws a named error when no block is present', () => {
     expect(() => parseFramed('nothing here')).toThrow(/no result block/i);
   });
+
+  it('round-trips a result whose comment body contains the literal end marker', () => {
+    const result: CliResult = {
+      status: 'submitted',
+      verdict: 'comment',
+      round: 1,
+      general: '',
+      threads: [
+        {
+          id: 't1',
+          file: 'src/auth.ts',
+          side: 'new',
+          anchor: { line: 1, content: '', contextHash: 'x' },
+          status: 'open',
+          messages: [
+            {
+              author: 'user',
+              round: 1,
+              body: 'copy-pasted output including WEB_REVIEW_RESULT>>> right here',
+              at: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(parseFramed(frameResult(result))).toEqual(result);
+  });
 });

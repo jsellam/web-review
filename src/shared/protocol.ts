@@ -16,8 +16,11 @@ export function parseFramed(text: string): CliResult {
   const start = text.lastIndexOf(RESULT_START);
   if (start === -1) throw new Error('web-review: no result block found in output');
 
-  const end = text.indexOf(RESULT_END, start);
-  if (end === -1) throw new Error('web-review: result block is not terminated');
+  // A comment body can itself contain the literal end marker (a reviewer typed
+  // it, or quoted it). The real terminator is always the last occurrence in the
+  // text, so search from the end rather than stopping at the first match.
+  const end = text.lastIndexOf(RESULT_END);
+  if (end === -1 || end < start) throw new Error('web-review: result block is not terminated');
 
   return JSON.parse(text.slice(start + RESULT_START.length, end)) as CliResult;
 }
