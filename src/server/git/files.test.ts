@@ -46,6 +46,20 @@ describe('listChangedFiles', () => {
     expect(renamed?.oldPath).toBe('src/keep.ts');
   });
 
+  it('reports line counts for renamed files', async () => {
+    await repo.run('mv', 'src/keep.ts', 'src/renamed.ts');
+    await repo.write('src/renamed.ts', 'const a = 1;\nconst c = 3;\n');
+
+    const range = await resolveRange('HEAD', { cwd: repo.dir });
+    const files = await listChangedFiles(range, { cwd: repo.dir });
+    const renamed = files.find((f) => f.path === 'src/renamed.ts');
+
+    expect(renamed?.status).toBe('renamed');
+    expect(renamed?.oldPath).toBe('src/keep.ts');
+    expect(renamed?.additions).toBe(1);
+    expect(renamed?.deletions).toBe(0);
+  });
+
   it('marks untracked binary files instead of counting lines', async () => {
     await repo.write('logo.png', `${NUL}PNG${NUL}data`);
 
@@ -155,5 +169,20 @@ describe('readSide', () => {
       .toBe('const a = 1;\n');
     expect(await readSide('src/café.ts', 'new', range, { cwd: repo.dir }))
       .toBe('const a = 2;\n');
+  });
+
+  it('throws for a bad ref, distinguishing from a missing file', async () => {
+    const range = await resolveRange('HEAD', { cwd: repo.dir });
+
+    // Create a range with a bad ref
+    const badRange = { ...range, base: 'nonexistent-ref' };
+
+    // Should throw because the ref is bad
+    await expect(readSide('src/keep.ts', 'old', badRange, { cwd: repo.dir }))
+      .rejects.toThrow();
+
+    // Should return null because the file doesn't exist on the valid ref
+    const missingFile = await readSide('nonexistent.ts', 'old', range, { cwd: repo.dir });
+    expect(missingFile).toBeNull();
   });
 });

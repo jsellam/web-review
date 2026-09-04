@@ -18,19 +18,56 @@ interface Counts {
   binary: boolean;
 }
 
-/** With `-z`, `--numstat` prints records as "<added>\t<deleted>\t<path>\0", with "-" for both on binary files. */
+/** With `-z`, `--numstat` prints records with different formats:
+ * - Normal: `<added>\t<deleted>\t<path>\0`
+ * - Rename/copy: `<added>\t<deleted>\t\0<oldpath>\0<newpath>\0`
+ * The path field may be empty for renames, with old and new paths as separate fields.
+ */
 function parseNumstat(output: string): Map<string, Counts> {
   const counts = new Map<string, Counts>();
-  const records = output.split(NUL).filter((r) => r.length > 0);
+  const fields = output.split(NUL);
 
-  for (const record of records) {
-    const [added, deleted, path] = record.split('\t');
-    if (!path || added === undefined || deleted === undefined) continue;
-    counts.set(path, {
-      additions: added === '-' ? 0 : Number(added),
-      deletions: deleted === '-' ? 0 : Number(deleted),
-      binary: added === '-' && deleted === '-',
-    });
+  let i = 0;
+  while (i < fields.length) {
+    const field = fields[i]!;
+
+    // Find first two tabs to extract added, deleted, and path remainder
+    const tabIdx1 = field.indexOf('\t');
+    if (tabIdx1 === -1) {
+      i++;
+      continue;
+    }
+
+    const tabIdx2 = field.indexOf('\t', tabIdx1 + 1);
+    if (tabIdx2 === -1) {
+      i++;
+      continue;
+    }
+
+    const added = field.substring(0, tabIdx1);
+    const deleted = field.substring(tabIdx1 + 1, tabIdx2);
+    const path = field.substring(tabIdx2 + 1);
+
+    if (path === '') {
+      // Rename/copy format: next two fields are oldpath and newpath
+      const newPath = fields[i + 2] ?? '';
+      if (newPath) {
+        counts.set(newPath, {
+          additions: added === '-' ? 0 : Number(added),
+          deletions: deleted === '-' ? 0 : Number(deleted),
+          binary: added === '-' && deleted === '-',
+        });
+      }
+      i += 3;
+    } else {
+      // Normal format: path is after the second tab
+      counts.set(path, {
+        additions: added === '-' ? 0 : Number(added),
+        deletions: deleted === '-' ? 0 : Number(deleted),
+        binary: added === '-' && deleted === '-',
+      });
+      i += 1;
+    }
   }
   return counts;
 }
@@ -127,8 +164,20 @@ export async function readSide(
   opts: GitOptions,
 ): Promise<string | null> {
   if (side === 'old') {
-    const exists = await gitOk(['cat-file', '-e', `${range.base}:${path}`], opts);
-    if (!exists) return null;
+    // Verify the ref exists before checking the path; let bad refs throw
+    const refExists = await gitOk(
+      ['rev-parse', '--verify', '--quiet', `${range.base}^{commit}`],
+      opts,
+    );
+    if (!refExists) {
+      // Call without --quiet to get the error message
+      await git(['rev-parse', '--verify', `${range.base}^{commit}`], opts);
+      throw new Error('unreachable');
+    }
+
+    // Now check if the file exists on that ref
+    const fileExists = await gitOk(['cat-file', '-e', `${range.base}:${path}`], opts);
+    if (!fileExists) return null;
     return gitRaw(['show', `${range.base}:${path}`], opts);
   }
 
