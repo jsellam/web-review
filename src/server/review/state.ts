@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contextHash, makeAnchor, relocate } from './anchor.js';
+import { isENOENT } from './request.js';
 import type {
   Message,
   ReviewRequest,
@@ -25,8 +26,13 @@ export function emptyState(): ReviewState {
 export type LinesLookup = (file: string, side: Side) => Promise<string[] | null>;
 
 export async function readState(stateDir: string): Promise<ReviewState> {
-  const raw = await readFile(join(stateDir, STATE_FILE), 'utf8').catch(() => null);
-  if (raw === null) return emptyState();
+  let raw: string;
+  try {
+    raw = await readFile(join(stateDir, STATE_FILE), 'utf8');
+  } catch (error) {
+    if (isENOENT(error)) return emptyState();
+    throw error;
+  }
 
   try {
     const parsed = JSON.parse(raw) as ReviewState;
@@ -71,13 +77,13 @@ export async function openRound(
   for (const thread of state.threads) {
     const lines = await lookup(thread.file, thread.side);
     if (lines === null) {
-      threads.push({ ...thread, status: 'outdated' });
+      threads.push({ ...thread, status: thread.status === 'open' ? 'outdated' : thread.status });
       continue;
     }
 
     const moved = relocate(thread.anchor, lines);
     if (moved.line === null) {
-      threads.push({ ...thread, status: 'outdated' });
+      threads.push({ ...thread, status: thread.status === 'open' ? 'outdated' : thread.status });
       continue;
     }
 

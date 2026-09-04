@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -84,6 +84,25 @@ describe('readState / writeState', () => {
     await rm(join(dir, 'state.json'));
 
     expect(await readState(dir)).toEqual(emptyState());
+  });
+
+  it('falls back to an empty state when the file contains malformed JSON', async () => {
+    await writeFile(join(dir, 'state.json'), '{not valid json', 'utf8');
+
+    expect(await readState(dir)).toEqual(emptyState());
+  });
+
+  it('falls back to an empty state when the version does not match', async () => {
+    await writeFile(join(dir, 'state.json'), JSON.stringify({ version: 2, round: 5, threads: [] }), 'utf8');
+
+    expect(await readState(dir)).toEqual(emptyState());
+  });
+
+  it('rethrows a non-ENOENT read error instead of masking it as empty state', async () => {
+    // Make state.json a directory so readFile fails with EISDIR, not ENOENT.
+    await mkdir(join(dir, 'state.json'));
+
+    await expect(readState(dir)).rejects.toThrow();
   });
 });
 
@@ -200,6 +219,50 @@ describe('openRound', () => {
 
     expect(second.threads[0]?.status).toBe('resolved');
   });
+
+  it('never lets a round where the file goes missing undo a human resolve', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+    const resolved = await applySubmission(first, submission({ resolved: ['t1'] }), lookup, now);
+    expect(resolved.threads[0]?.status).toBe('resolved');
+
+    const fileMissing = await openRound(resolved, request(), lookupOf({}), now);
+    expect(fileMissing.threads[0]?.status).toBe('resolved');
+
+    const fileBack = await openRound(fileMissing, request(), lookup, now);
+    expect(fileBack.threads[0]?.status).toBe('resolved');
+  });
+
+  it('still takes an open thread through outdated and back to open across the same sequence', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+    expect(first.threads[0]?.status).toBe('open');
+
+    const fileMissing = await openRound(first, request(), lookupOf({}), now);
+    expect(fileMissing.threads[0]?.status).toBe('outdated');
+
+    const fileBack = await openRound(fileMissing, request(), lookup, now);
+    expect(fileBack.threads[0]?.status).toBe('open');
+  });
+
+  it('silently ignores an agent reply naming a thread id that does not exist', async () => {
+    const next = await openRound(
+      emptyState(),
+      request({ replies: [{ threadId: 'nope', body: 'x' }] }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual([]);
+  });
 });
 
 describe('applySubmission', () => {
@@ -296,5 +359,27 @@ describe('applySubmission', () => {
     );
 
     expect(next.threads.map((t) => t.id)).toEqual(['t1', 't2']);
+  });
+
+  it('silently ignores a reply, resolve, or reopen naming a thread id that does not exist', async () => {
+    const state = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const next = await applySubmission(
+      state,
+      submission({
+        replies: [{ threadId: 'nope', body: 'x' }],
+        resolved: ['nope'],
+        reopened: ['nope'],
+      }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual(state.threads);
   });
 });
