@@ -15,6 +15,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isENOENT(error: unknown): boolean {
+  return isRecord(error) && error.code === 'ENOENT';
+}
+
 function asString(value: unknown, field: string, fallback?: string): string {
   if (value === undefined && fallback !== undefined) return fallback;
   if (typeof value !== 'string') throw new RequestError(`${field} must be a string`);
@@ -73,11 +77,18 @@ export function validateRequest(raw: unknown): ReviewRequest {
   };
 }
 
-const EMPTY: ReviewRequest = { summary: '', base: 'auto', annotations: [], replies: [] };
+function defaults(): ReviewRequest {
+  return { summary: '', base: 'auto', annotations: [], replies: [] };
+}
 
 export async function readRequest(stateDir: string): Promise<ReviewRequest> {
-  const raw = await readFile(join(stateDir, REQUEST_FILE), 'utf8').catch(() => null);
-  if (raw === null) return { ...EMPTY };
+  let raw: string;
+  try {
+    raw = await readFile(join(stateDir, REQUEST_FILE), 'utf8');
+  } catch (error) {
+    if (isENOENT(error)) return defaults();
+    throw error;
+  }
 
   let parsed: unknown;
   try {

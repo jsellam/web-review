@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -78,6 +78,20 @@ describe('readRequest', () => {
 
     await expect(readRequest(dir)).rejects.toThrow(/request\.json is not valid JSON/i);
   });
+
+  it('rethrows non-ENOENT read errors', async () => {
+    await mkdir(join(dir, 'request.json'));
+
+    await expect(readRequest(dir)).rejects.toThrow();
+  });
+
+  it('returns fresh default objects on each file-absent call', async () => {
+    const first = await readRequest(dir);
+    const second = await readRequest(dir);
+
+    expect(first.annotations).not.toBe(second.annotations);
+    expect(first.replies).not.toBe(second.replies);
+  });
 });
 
 describe('consumeRequest', () => {
@@ -86,5 +100,12 @@ describe('consumeRequest', () => {
 
     expect((await consumeRequest(dir)).summary).toBe('hi');
     await expect(access(join(dir, 'request.json'))).rejects.toThrow();
+  });
+
+  it('rejects on malformed JSON and leaves the file in place', async () => {
+    await writeFile(join(dir, 'request.json'), '{ not json', 'utf8');
+
+    await expect(consumeRequest(dir)).rejects.toThrow(/request\.json is not valid JSON/i);
+    await expect(access(join(dir, 'request.json'))).resolves.toBeUndefined();
   });
 });
