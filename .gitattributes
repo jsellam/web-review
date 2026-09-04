@@ -1,0 +1,2 @@
+dist/** -diff -merge=ours linguist-generated
+app/dist/** -diff -merge=ours linguist-generated
