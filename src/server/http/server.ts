@@ -1,0 +1,163 @@
+import { createServer, type Server } from 'node:http';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { handleApi, type RouteDeps } from './routes.js';
+import { serveStatic } from './static.js';
+import type { SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
+
+export const SERVER_FILE = 'server.json';
+
+export interface ServerRecord {
+  pid: number;
+  port: number;
+  token: string;
+  startedAt: string;
+}
+
+/**
+ * Explicit rather than derived from RouteDeps via Omit<...>: the two interfaces
+ * share some field names, but StartOptions describes what a caller supplies to
+ * boot the server, while RouteDeps describes what a single request handler
+ * needs. Keeping them separate reads more plainly than reconstructing one from
+ * the other with utility types.
+ */
+export interface StartOptions {
+  staticRoot: string;
+  stateDir: string;
+  port: number;
+  token: string;
+  getSession(): Promise<SessionPayload>;
+  getFile(path: string, side: Side): Promise<string | null>;
+  /** Called once, with the first accepted submission. */
+  onSubmit(payload: SubmitPayload): Promise<void>;
+}
+
+export interface ServerHandle {
+  port: number;
+  url: string;
+  close(): Promise<void>;
+  /** Resolves true if a submission arrives within the timeout, false otherwise. */
+  waitForSubmission(timeoutMs: number): Promise<boolean>;
+}
+
+export async function startServer(options: StartOptions): Promise<ServerHandle> {
+  let submitted = false;
+  const waiters = new Set<(value: boolean) => void>();
+
+  // Hoisted above createServer (and reassigned after listen) so the request
+  // handler closure never references a binding before its declaration.
+  let port = options.port;
+
+  const waitForSubmission = (timeoutMs: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      if (submitted) return resolve(true);
+
+      const settle = (value: boolean) => {
+        clearTimeout(timer);
+        waiters.delete(settle);
+        resolve(value);
+      };
+      const timer = setTimeout(() => settle(false), timeoutMs);
+      timer.unref?.();
+      waiters.add(settle);
+    });
+
+  const server: Server = createServer((req, res) => {
+    void (async () => {
+      const deps: RouteDeps = {
+        token: options.token,
+        port,
+        getSession: options.getSession,
+        getFile: options.getFile,
+        waitForSubmission,
+        // This server is the single writer for its repository for the lifetime
+        // of one review: server.json plus isServerAlive's liveness check are
+        // what prevent a second server from starting concurrently against the
+        // same repository, so a single in-process `submitted` flag and waiter
+        // set are enough here — no cross-process locking is needed.
+        submit: async (payload) => {
+          await options.onSubmit(payload);
+          submitted = true;
+          for (const waiter of [...waiters]) waiter(true);
+        },
+      };
+
+      if (await handleApi(req, res, deps)) return;
+
+      const response = await serveStatic(
+        options.staticRoot,
+        new URL(req.url ?? '/', `http://127.0.0.1:${port}`).pathname,
+      );
+      res.writeHead(response.status, {
+        'content-type': response.contentType,
+        'content-length': response.body.length,
+        'cache-control': 'no-store',
+      });
+      res.end(response.body);
+    })();
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(options.port, '127.0.0.1', resolve);
+  });
+
+  const address = server.address();
+  port = typeof address === 'object' && address ? address.port : options.port;
+  const url = `http://127.0.0.1:${port}/?t=${options.token}`;
+
+  await writeServerRecord(options.stateDir, {
+    pid: process.pid,
+    port,
+    token: options.token,
+    startedAt: new Date().toISOString(),
+  });
+
+  return {
+    port,
+    url,
+    waitForSubmission,
+    async close() {
+      await removeServerRecord(options.stateDir);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+export async function writeServerRecord(stateDir: string, record: ServerRecord): Promise<void> {
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(join(stateDir, SERVER_FILE), `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+}
+
+export async function readServerRecord(stateDir: string): Promise<ServerRecord | null> {
+  const raw = await readFile(join(stateDir, SERVER_FILE), 'utf8').catch(() => null);
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as ServerRecord;
+  } catch {
+    return null;
+  }
+}
+
+export async function removeServerRecord(stateDir: string): Promise<void> {
+  await rm(join(stateDir, SERVER_FILE), { force: true });
+}
+
+/**
+ * A record can outlive its process (a crash, a reboot, a recycled pid). Check
+ * the pid is still there, then confirm something is actually answering on the
+ * port with the recorded token — both checks, not either.
+ */
+export async function isServerAlive(record: ServerRecord): Promise<boolean> {
+  try {
+    process.kill(record.pid, 0);
+  } catch {
+    return false;
+  }
+
+  const response = await fetch(`http://127.0.0.1:${record.port}/api/session`, {
+    headers: { 'x-review-token': record.token, host: `127.0.0.1:${record.port}` },
+  }).catch(() => null);
+
+  return response?.ok === true;
+}

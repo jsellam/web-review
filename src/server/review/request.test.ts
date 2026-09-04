@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { consumeRequest, readRequest, RequestError, validateRequest } from './request.js';
+import { consumeRequest, readRequest, RequestError, validateRequest, validateSubmit } from './request.js';
 
 let dir: string;
 
@@ -107,5 +107,46 @@ describe('consumeRequest', () => {
 
     await expect(consumeRequest(dir)).rejects.toThrow(/request\.json is not valid JSON/i);
     await expect(access(join(dir, 'request.json'))).resolves.toBeUndefined();
+  });
+});
+
+describe('validateSubmit', () => {
+  it('accepts a complete submission', () => {
+    const payload = {
+      verdict: 'request_changes',
+      general: 'two things',
+      newComments: [{ file: 'a.ts', side: 'new', line: 4, body: 'rename' }],
+      replies: [{ threadId: 't1', body: 'ok' }],
+      resolved: ['t2'],
+      reopened: ['t3'],
+    };
+
+    expect(validateSubmit(payload)).toEqual(payload);
+  });
+
+  it('defaults every list and the general comment', () => {
+    expect(validateSubmit({ verdict: 'approve' })).toEqual({
+      verdict: 'approve',
+      general: '',
+      newComments: [],
+      replies: [],
+      resolved: [],
+      reopened: [],
+    });
+  });
+
+  it('rejects an unknown verdict', () => {
+    expect(() => validateSubmit({ verdict: 'lgtm' })).toThrow(/verdict/);
+  });
+
+  it('names the offending field on a bad comment', () => {
+    expect(() =>
+      validateSubmit({ verdict: 'comment', newComments: [{ file: 'a.ts', side: 'new', line: -1, body: 'x' }] }),
+    ).toThrow(/newComments\[0\]\.line/);
+  });
+
+  it('rejects a non-string thread id in resolved', () => {
+    expect(() => validateSubmit({ verdict: 'comment', resolved: [7] }))
+      .toThrow(/resolved\[0\]/);
   });
 });

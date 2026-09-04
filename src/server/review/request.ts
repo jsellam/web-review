@@ -1,6 +1,14 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Annotation, Reply, ReviewRequest, Side } from '../../shared/types.js';
+import type {
+  Annotation,
+  NewComment,
+  Reply,
+  ReviewRequest,
+  Side,
+  SubmitPayload,
+  Verdict,
+} from '../../shared/types.js';
 
 export const REQUEST_FILE = 'request.json';
 
@@ -104,4 +112,51 @@ export async function consumeRequest(stateDir: string): Promise<ReviewRequest> {
   const request = await readRequest(stateDir);
   await rm(join(stateDir, REQUEST_FILE), { force: true });
   return request;
+}
+
+const VERDICTS: Verdict[] = ['approve', 'request_changes', 'comment'];
+
+function asVerdict(value: unknown): Verdict {
+  if (typeof value !== 'string' || !VERDICTS.includes(value as Verdict)) {
+    throw new RequestError(`verdict must be one of: ${VERDICTS.join(', ')}`);
+  }
+  return value as Verdict;
+}
+
+function asIdList(value: unknown, field: string): string[] {
+  return asArray(value, field).map((id, index) => {
+    if (typeof id !== 'string') throw new RequestError(`${field}[${index}] must be a string`);
+    return id;
+  });
+}
+
+function toNewComment(raw: unknown, index: number): NewComment {
+  const field = `newComments[${index}]`;
+  if (!isRecord(raw)) throw new RequestError(`${field} must be a JSON object`);
+
+  const line = raw['line'];
+  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+    throw new RequestError(`${field}.line must be an integer >= 1`);
+  }
+
+  return {
+    file: asString(raw['file'], `${field}.file`),
+    line,
+    side: asSide(raw['side'], `${field}.side`),
+    body: asString(raw['body'], `${field}.body`),
+  };
+}
+
+/** Validate what the browser POSTs. Same shape of errors as validateRequest. */
+export function validateSubmit(raw: unknown): SubmitPayload {
+  if (!isRecord(raw)) throw new RequestError('submission must be a JSON object');
+
+  return {
+    verdict: asVerdict(raw['verdict']),
+    general: asString(raw['general'], 'general', ''),
+    newComments: asArray(raw['newComments'], 'newComments').map(toNewComment),
+    replies: asArray(raw['replies'], 'replies').map(toReply),
+    resolved: asIdList(raw['resolved'], 'resolved'),
+    reopened: asIdList(raw['reopened'], 'reopened'),
+  };
 }
