@@ -1,0 +1,300 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  applySubmission,
+  emptyState,
+  openRound,
+  readState,
+  stateDirFor,
+  writeState,
+  type LinesLookup,
+} from './state.js';
+import type { ReviewRequest, ReviewState, SubmitPayload } from '../../shared/types.js';
+
+const AT = '2026-09-04T10:00:00.000Z';
+const now = () => AT;
+
+const request = (over: Partial<ReviewRequest> = {}): ReviewRequest => ({
+  summary: '',
+  base: 'auto',
+  annotations: [],
+  replies: [],
+  ...over,
+});
+
+const submission = (over: Partial<SubmitPayload> = {}): SubmitPayload => ({
+  verdict: 'request_changes',
+  general: '',
+  newComments: [],
+  replies: [],
+  resolved: [],
+  reopened: [],
+  ...over,
+});
+
+const lookupOf = (files: Record<string, string[]>): LinesLookup =>
+  async (file) => files[file] ?? null;
+
+describe('stateDirFor', () => {
+  it('places state inside .git so it never shows up in the diff under review', () => {
+    expect(stateDirFor('/repo/.git')).toBe(join('/repo/.git', 'web-review'));
+  });
+});
+
+describe('readState / writeState', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'web-review-state-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('returns an empty state when nothing has been written', async () => {
+    expect(await readState(dir)).toEqual({ version: 1, round: 0, threads: [] });
+  });
+
+  it('round-trips a state through disk, creating the directory', async () => {
+    const state: ReviewState = {
+      version: 1,
+      round: 2,
+      threads: [
+        {
+          id: 't1',
+          file: 'a.ts',
+          side: 'new',
+          anchor: { line: 1, content: 'x', contextHash: 'abc' },
+          status: 'open',
+          messages: [{ author: 'user', round: 1, body: 'hi', at: AT }],
+        },
+      ],
+    };
+
+    await writeState(join(dir, 'nested'), state);
+
+    expect(await readState(join(dir, 'nested'))).toEqual(state);
+  });
+
+  it('falls back to an empty state when the file is corrupt', async () => {
+    await writeState(dir, emptyState());
+    await rm(join(dir, 'state.json'));
+
+    expect(await readState(dir)).toEqual(emptyState());
+  });
+});
+
+describe('openRound', () => {
+  const lookup = lookupOf({ 'a.ts': ['one', 'two', 'three'] });
+
+  it('bumps the round counter', async () => {
+    expect((await openRound(emptyState(), request(), lookup, now)).round).toBe(1);
+  });
+
+  it('turns agent annotations into threads authored by the agent', async () => {
+    const next = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 2, side: 'new', body: 'unsure' }] }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual([
+      {
+        id: 't1',
+        file: 'a.ts',
+        side: 'new',
+        anchor: { line: 2, content: 'two', contextHash: expect.any(String) },
+        status: 'open',
+        messages: [{ author: 'agent', round: 1, body: 'unsure', at: AT }],
+      },
+    ]);
+  });
+
+  it('drops an annotation pointing at a line that does not exist', async () => {
+    const next = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 99, side: 'new', body: 'x' }] }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual([]);
+  });
+
+  it('appends agent replies to existing threads', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const second = await openRound(first, request({ replies: [{ threadId: 't1', body: 'done' }] }), lookup, now);
+
+    expect(second.threads[0]?.messages).toEqual([
+      { author: 'agent', round: 1, body: 'q', at: AT },
+      { author: 'agent', round: 2, body: 'done', at: AT },
+    ]);
+  });
+
+  it('follows a thread whose line moved', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 2, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const second = await openRound(
+      first,
+      request(),
+      lookupOf({ 'a.ts': ['inserted', 'one', 'two', 'three'] }),
+      now,
+    );
+
+    expect(second.threads[0]?.anchor.line).toBe(3);
+    expect(second.threads[0]?.status).toBe('open');
+  });
+
+  it('marks a thread outdated when its line is gone, without deleting it', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 2, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const second = await openRound(first, request(), lookupOf({ 'a.ts': ['one', 'three'] }), now);
+
+    expect(second.threads).toHaveLength(1);
+    expect(second.threads[0]?.status).toBe('outdated');
+  });
+
+  it('marks a thread outdated when its file disappeared entirely', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const second = await openRound(first, request(), lookupOf({}), now);
+
+    expect(second.threads[0]?.status).toBe('outdated');
+  });
+
+  it('leaves resolved threads resolved when they relocate cleanly', async () => {
+    const first = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+    const resolved = await applySubmission(first, submission({ resolved: ['t1'] }), lookup, now);
+
+    const second = await openRound(resolved, request(), lookup, now);
+
+    expect(second.threads[0]?.status).toBe('resolved');
+  });
+});
+
+describe('applySubmission', () => {
+  const lookup = lookupOf({ 'a.ts': ['one', 'two', 'three'] });
+
+  it('anchors a new comment against the current file contents', async () => {
+    const state = await openRound(emptyState(), request(), lookup, now);
+
+    const next = await applySubmission(
+      state,
+      submission({
+        newComments: [{ file: 'a.ts', side: 'new', line: 3, body: 'rename this' }],
+      }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual([
+      {
+        id: 't1',
+        file: 'a.ts',
+        side: 'new',
+        anchor: { line: 3, content: 'three', contextHash: expect.any(String) },
+        status: 'open',
+        messages: [{ author: 'user', round: 1, body: 'rename this', at: AT }],
+      },
+    ]);
+  });
+
+  it('appends a human reply to an existing thread', async () => {
+    const state = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const next = await applySubmission(
+      state,
+      submission({ replies: [{ threadId: 't1', body: 'no, keep it' }] }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads[0]?.messages.at(-1)).toEqual({
+      author: 'user',
+      round: 1,
+      body: 'no, keep it',
+      at: AT,
+    });
+  });
+
+  it('resolves and reopens threads by id', async () => {
+    const state = await openRound(
+      emptyState(),
+      request({ annotations: [{ file: 'a.ts', line: 1, side: 'new', body: 'q' }] }),
+      lookup,
+      now,
+    );
+
+    const resolved = await applySubmission(state, submission({ resolved: ['t1'] }), lookup, now);
+    expect(resolved.threads[0]?.status).toBe('resolved');
+
+    const reopened = await applySubmission(resolved, submission({ reopened: ['t1'] }), lookup, now);
+    expect(reopened.threads[0]?.status).toBe('open');
+  });
+
+  it('ignores a new comment on a line that no longer exists', async () => {
+    const state = await openRound(emptyState(), request(), lookup, now);
+
+    const next = await applySubmission(
+      state,
+      submission({ newComments: [{ file: 'a.ts', side: 'new', line: 99, body: 'x' }] }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual([]);
+  });
+
+  it('gives every new thread a distinct id', async () => {
+    const state = await openRound(emptyState(), request(), lookup, now);
+
+    const next = await applySubmission(
+      state,
+      submission({
+        newComments: [
+          { file: 'a.ts', side: 'new', line: 1, body: 'a' },
+          { file: 'a.ts', side: 'new', line: 2, body: 'b' },
+        ],
+      }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads.map((t) => t.id)).toEqual(['t1', 't2']);
+  });
+});
