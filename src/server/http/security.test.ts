@@ -29,6 +29,16 @@ describe('isHostAllowed', () => {
   it('rejects a missing Host header', () => {
     expect(isHostAllowed(undefined, 4711)).toBe(false);
   });
+
+  it('rejects a trailing-dot host (DNS rebinding variant)', () => {
+    expect(isHostAllowed('127.0.0.1.:4711', 4711)).toBe(false);
+    expect(isHostAllowed('localhost.:4711', 4711)).toBe(false);
+  });
+
+  it('rejects a different-case host', () => {
+    expect(isHostAllowed('LOCALHOST:4711', 4711)).toBe(false);
+    expect(isHostAllowed('127.0.0.1:4711', 4711)).toBe(true); // lowercase still works
+  });
 });
 
 describe('isTokenValid', () => {

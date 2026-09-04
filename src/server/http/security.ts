@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 export const TOKEN_HEADER = 'x-review-token';
 export const TOKEN_QUERY = 't';
 
-const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
+const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost'];
 
 export function makeToken(): string {
   return randomBytes(16).toString('hex');
