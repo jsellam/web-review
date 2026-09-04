@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { git, type GitOptions } from './exec.js';
+import { git, gitRaw, gitOk, type GitOptions } from './exec.js';
 import type { DiffRange } from './range.js';
 import type { FileEntry, FileStatus, Side } from '../../shared/types.js';
 
@@ -8,8 +8,8 @@ const NUL = '\u0000';
 
 function diffArgs(range: DiffRange, extra: string[]): string[] {
   return range.staged
-    ? ['diff', '--cached', '-M', ...extra, range.base]
-    : ['diff', '-M', ...extra, range.base];
+    ? ['diff', '--cached', '-M', '-z', ...extra, range.base]
+    : ['diff', '-M', '-z', ...extra, range.base];
 }
 
 interface Counts {
@@ -18,15 +18,15 @@ interface Counts {
   binary: boolean;
 }
 
-/** `--numstat` prints "<added>\t<deleted>\t<path>", with "-" for both on binary files. */
+/** With `-z`, `--numstat` prints records as "<added>\t<deleted>\t<path>\0", with "-" for both on binary files. */
 function parseNumstat(output: string): Map<string, Counts> {
   const counts = new Map<string, Counts>();
-  for (const line of output.split('\n')) {
-    if (!line.trim()) continue;
-    const [added, deleted, ...rest] = line.split('\t');
-    const path = rest.join('\t');
+  const records = output.split(NUL).filter((r) => r.length > 0);
+
+  for (const record of records) {
+    const [added, deleted, path] = record.split('\t');
     if (!path || added === undefined || deleted === undefined) continue;
-    counts.set(renameTarget(path), {
+    counts.set(path, {
       additions: added === '-' ? 0 : Number(added),
       deletions: deleted === '-' ? 0 : Number(deleted),
       binary: added === '-' && deleted === '-',
@@ -35,23 +35,11 @@ function parseNumstat(output: string): Map<string, Counts> {
   return counts;
 }
 
-/** Rename entries look like "old => new" or "dir/{old => new}". We want the new path. */
-function renameTarget(path: string): string {
-  const braced = path.match(/^(.*)\{(.*) => (.*)\}(.*)$/);
-  if (braced) {
-    const [, prefix = '', , to = '', suffix = ''] = braced;
-    return `${prefix}${to}${suffix}`.replace(/\/\//g, '/');
-  }
-  const parts = path.split(' => ');
-  return parts.length === 2 ? parts[1]! : path;
-}
-
 const STATUS_MAP: Record<string, FileStatus> = {
   A: 'added',
   M: 'modified',
   D: 'deleted',
   R: 'renamed',
-  C: 'added',
   T: 'modified',
 };
 
@@ -67,22 +55,37 @@ export async function listChangedFiles(
   const counts = parseNumstat(numstat);
   const entries: FileEntry[] = [];
 
-  for (const line of nameStatus.split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    const code = parts[0]!.charAt(0);
+  // Parse NUL-delimited nameStatus records
+  // Format with -z: status\0path\0 for normal, status\0oldpath\0newpath\0 for renames
+  const records = nameStatus.split(NUL).filter((r) => r.length > 0);
+  let i = 0;
+  while (i < records.length) {
+    const code = records[i]!.charAt(0);
     const status = STATUS_MAP[code] ?? 'modified';
 
-    const isRename = code === 'R' || code === 'C';
-    const oldPath = parts[1] ?? '';
-    const path = isRename ? (parts[2] ?? oldPath) : oldPath;
-
-    entries.push({
-      path,
-      oldPath: status === 'added' ? null : oldPath,
-      status,
-      ...(counts.get(path) ?? { additions: 0, deletions: 0, binary: false }),
-    });
+    const isRename = code === 'R';
+    if (isRename) {
+      // Rename format: status\0oldpath\0newpath\0
+      const oldPath = records[i + 1] ?? '';
+      const path = records[i + 2] ?? oldPath;
+      entries.push({
+        path,
+        oldPath,
+        status,
+        ...(counts.get(path) ?? { additions: 0, deletions: 0, binary: false }),
+      });
+      i += 3;
+    } else {
+      // Normal format: status\0path\0
+      const path = records[i + 1] ?? '';
+      entries.push({
+        path,
+        oldPath: status === 'added' ? null : path,
+        status,
+        ...(counts.get(path) ?? { additions: 0, deletions: 0, binary: false }),
+      });
+      i += 2;
+    }
   }
 
   if (!range.staged) entries.push(...(await listUntracked(opts)));
@@ -92,8 +95,8 @@ export async function listChangedFiles(
 
 /** `git diff` never lists untracked files, so we add them as pure additions. */
 async function listUntracked(opts: GitOptions): Promise<FileEntry[]> {
-  const output = await git(['ls-files', '--others', '--exclude-standard'], opts);
-  const paths = output.split('\n').filter((p) => p.trim().length > 0);
+  const output = await git(['ls-files', '--others', '--exclude-standard', '-z'], opts);
+  const paths = output.split(NUL).filter((p) => p.length > 0);
 
   return Promise.all(
     paths.map(async (path) => {
@@ -124,20 +127,19 @@ export async function readSide(
   opts: GitOptions,
 ): Promise<string | null> {
   if (side === 'old') {
-    return git(['show', `${range.base}:${path}`], opts).then(withTrailingNewline, () => null);
+    const exists = await gitOk(['cat-file', '-e', `${range.base}:${path}`], opts);
+    if (!exists) return null;
+    return gitRaw(['show', `${range.base}:${path}`], opts);
   }
 
   if (range.staged) {
-    return git(['show', `:${path}`], opts).then(withTrailingNewline, () => null);
+    const exists = await gitOk(['cat-file', '-e', `:${path}`], opts);
+    if (!exists) return null;
+    return gitRaw(['show', `:${path}`], opts);
   }
 
   const full = join(opts.cwd, path);
   const info = await stat(full).catch(() => null);
   if (!info?.isFile()) return null;
   return readFile(full, 'utf8');
-}
-
-/** `git show` strips one trailing newline; restore it so contents round-trip. */
-function withTrailingNewline(content: string): string {
-  return content.endsWith('\n') || content.length === 0 ? content : `${content}\n`;
 }

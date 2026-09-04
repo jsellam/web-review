@@ -76,6 +76,16 @@ describe('listChangedFiles', () => {
     expect((await listChangedFiles(range, { cwd: repo.dir })).map((f) => f.path))
       .not.toContain('ignored/secret.txt');
   });
+
+  it('returns the real path for a file with a non-ASCII name', async () => {
+    await repo.write('src/café.ts', 'const x = 1;\n');
+
+    const range = await resolveRange('HEAD', { cwd: repo.dir });
+    const files = await listChangedFiles(range, { cwd: repo.dir });
+
+    expect(files.find((f) => f.path === 'src/café.ts')).toBeDefined();
+    expect(files.find((f) => f.path.includes('caf\\3'))).toBeUndefined();
+  });
 });
 
 describe('readSide', () => {
@@ -110,5 +120,40 @@ describe('readSide', () => {
     const range = await resolveRange('staged', { cwd: repo.dir });
 
     expect(await readSide('src/keep.ts', 'new', range, { cwd: repo.dir })).toBe('staged\n');
+  });
+
+  it('round-trips a file with no trailing newline on the old side', async () => {
+    await repo.write('src/keep.ts', 'no newline at end');
+    await repo.run('add', 'src/keep.ts');
+    await repo.commit('file without newline');
+    await repo.write('src/keep.ts', 'changed\n');
+
+    const range = await resolveRange('HEAD', { cwd: repo.dir });
+
+    expect(await readSide('src/keep.ts', 'old', range, { cwd: repo.dir }))
+      .toBe('no newline at end');
+  });
+
+  it('round-trips a file with no trailing newline on the staged new side', async () => {
+    await repo.write('src/keep.ts', 'staged no newline');
+    await repo.run('add', 'src/keep.ts');
+
+    const range = await resolveRange('staged', { cwd: repo.dir });
+
+    expect(await readSide('src/keep.ts', 'new', range, { cwd: repo.dir }))
+      .toBe('staged no newline');
+  });
+
+  it('reads a file with a non-ASCII name from both sides', async () => {
+    await repo.write('src/café.ts', 'const a = 1;\n');
+    await repo.commit('add café');
+    await repo.write('src/café.ts', 'const a = 2;\n');
+
+    const range = await resolveRange('HEAD', { cwd: repo.dir });
+
+    expect(await readSide('src/café.ts', 'old', range, { cwd: repo.dir }))
+      .toBe('const a = 1;\n');
+    expect(await readSide('src/café.ts', 'new', range, { cwd: repo.dir }))
+      .toBe('const a = 2;\n');
   });
 });

@@ -20,13 +20,18 @@ export class GitError extends Error {
 
 /** Run git and return stdout. The single place in the codebase that spawns a process. */
 export async function git(args: string[], opts: GitOptions): Promise<string> {
+  return gitRaw(args, opts).then((out) => out.replace(/\n$/, ''));
+}
+
+/** Run git and return stdout untouched, without stripping the trailing newline. */
+export async function gitRaw(args: string[], opts: GitOptions): Promise<string> {
   try {
     const { stdout } = await run('git', args, {
       cwd: opts.cwd,
       maxBuffer: 64 * 1024 * 1024,
       encoding: 'utf8',
     });
-    return stdout.replace(/\n$/, '');
+    return stdout;
   } catch (error) {
     const e = error as { stderr?: string; code?: number };
     throw new GitError(args, e.stderr ?? '', e.code ?? 1);
