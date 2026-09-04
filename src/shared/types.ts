@@ -53,11 +53,17 @@ export interface Annotation {
   body: string;
 }
 
+export interface Reply {
+  threadId: string;
+  body: string;
+}
+
 /** `.git/web-review/request.json`, written by the agent. All fields optional on disk. */
 export interface ReviewRequest {
   summary: string;
   base: string;
   annotations: Annotation[];
+  replies: Reply[];
 }
 
 export interface SessionPayload {
@@ -73,11 +79,6 @@ export interface NewComment {
   file: string;
   side: Side;
   line: number;
-  body: string;
-}
-
-export interface Reply {
-  threadId: string;
   body: string;
 }
 
