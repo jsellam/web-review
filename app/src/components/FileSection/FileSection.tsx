@@ -29,7 +29,15 @@ export function FileSection({ file, viewed, onViewedChange, children }: Props) {
             tabIndex={0}
             aria-label={collapsed ? 'Expand file' : 'Collapse file'}
             onClick={() => setCollapsed((value) => !value)}
-            onKeyDown={(event) => event.key === 'Enter' && setCollapsed((value) => !value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                setCollapsed((value) => !value);
+              } else if (event.key === ' ') {
+                // Prevent the page from scrolling on Space, like a native button.
+                event.preventDefault();
+                setCollapsed((value) => !value);
+              }
+            }}
           >
             {collapsed ? <RightOutlined /> : <DownOutlined />}
           </span>

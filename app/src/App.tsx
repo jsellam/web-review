@@ -42,6 +42,12 @@ export function App({ api }: Props) {
               </Typography.Text>
             </Space>
           ) : null}
+          {/*
+            Scaffolding for Task 12: `mode` is tracked here but nothing reads it
+            yet, since the diff body that would branch on split/unified doesn't
+            exist until Task 12 replaces FileSection's placeholder children.
+            Clicking this control currently has no visible effect.
+          */}
           <Segmented
             value={mode}
             onChange={(value) => setMode(value as ViewMode)}
