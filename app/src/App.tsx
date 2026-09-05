@@ -5,11 +5,10 @@ import { FileTree } from './components/FileTree/FileTree.js';
 import { countThreadsByFile } from './components/FileTree/tree.js';
 import { FileSection } from './components/FileSection/FileSection.js';
 import { SummaryPanel } from './components/SummaryPanel/SummaryPanel.js';
+import { DiffPane, type ViewMode } from './components/DiffPane/index.js';
 import { useDraftStore } from './state/draft.js';
 import type { ReviewApi } from './api/client.js';
 import type { SessionPayload } from '../../src/shared/types.js';
-
-export type ViewMode = 'split' | 'unified';
 
 interface Props {
   api: ReviewApi;
@@ -42,12 +41,6 @@ export function App({ api }: Props) {
               </Typography.Text>
             </Space>
           ) : null}
-          {/*
-            Scaffolding for Task 12: `mode` is tracked here but nothing reads it
-            yet, since the diff body that would branch on split/unified doesn't
-            exist until Task 12 replaces FileSection's placeholder children.
-            Clicking this control currently has no visible effect.
-          */}
           <Segmented
             value={mode}
             onChange={(value) => setMode(value as ViewMode)}
@@ -88,8 +81,12 @@ export function App({ api }: Props) {
                       viewed={viewed[file.path] ?? false}
                       onViewedChange={(value) => setViewed(file.path, value)}
                     >
-                      {/* Task 12 replaces this with the diff body. */}
-                      <Typography.Text type="secondary">diff</Typography.Text>
+                      <DiffPane
+                        api={api}
+                        file={file}
+                        mode={mode}
+                        enabled={!(viewed[file.path] ?? false)}
+                      />
                     </FileSection>
                   </div>
                 ))}

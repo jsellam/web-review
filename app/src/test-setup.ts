@@ -29,3 +29,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as unknown as typeof window.matchMedia;
+
+// jsdom has no canvas backend, so HTMLCanvasElement#getContext('2d') always
+// returns null (jsdom defines the method, it just can't implement it).
+// @git-diff-view/react measures line-number gutter width with a canvas 2D
+// context on mount, which would otherwise throw and take down the whole
+// render tree in any test that mounts DiffPane. The exact width returned
+// doesn't matter for tests — only that measuring doesn't crash.
+HTMLCanvasElement.prototype.getContext = (() => ({
+  font: '',
+  measureText: (text: string) => ({ width: text.length * 7 }),
+})) as unknown as typeof HTMLCanvasElement.prototype.getContext;
