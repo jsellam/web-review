@@ -92,9 +92,20 @@ function linesLookup(range: DiffRange, cwd: string): LinesLookup {
   };
 }
 
-function emit(result: CliResult, code = 0): never {
-  process.stdout.write(`${frameResult(result)}\n`);
-  process.exit(code);
+/**
+ * Write the framed result and exit only once it has actually been flushed.
+ * Pipes are asynchronous on POSIX (unlike files and TTYs): calling
+ * `process.exit()` right after `process.stdout.write()` can terminate the
+ * process before the write reaches the reader, truncating the JSON an agent
+ * is piping in — the exact way this tool's output is normally consumed.
+ * The callback form waits for the flush before exiting.
+ *
+ * This does not return `never`: it merely schedules the exit, so every call
+ * site must follow it with an explicit `return` to stop the rest of the
+ * function from running in the meantime.
+ */
+function emit(result: CliResult, code = 0): void {
+  process.stdout.write(`${frameResult(result)}\n`, () => process.exit(code));
 }
 
 function openBrowser(url: string): void {
@@ -105,9 +116,16 @@ function openBrowser(url: string): void {
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
 
   try {
-    spawn(command, args, { detached: true, stdio: 'ignore' }).unref();
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+    // spawn() reports a missing executable asynchronously, via an 'error'
+    // event on the child — never as a synchronous throw. Without a listener,
+    // that event has no handler and Node's default behaviour kills this
+    // whole process before any result is ever printed. A missing browser
+    // opener must never be more than a silent no-op.
+    child.on('error', () => {});
+    child.unref();
   } catch {
-    // A missing browser opener is not a reason to fail the review.
+    // Defence in depth for any synchronous failure from spawn() itself.
   }
 }
 
@@ -173,12 +191,87 @@ async function waitForResult(stateDir: string, timeoutSeconds: number): Promise<
   return null;
 }
 
+const LOCK_FILE = 'server.lock';
+/** How long a lock is trusted before it's treated as abandoned by a dead invocation. */
+const LOCK_STALE_MS = 10_000;
+
+interface SpawnLock {
+  pid: number;
+  at: string;
+}
+
+function isEExist(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: string }).code === 'EEXIST';
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reading server.json and deciding to spawn a detached server is not one
+ * atomic step, so two near-simultaneous invocations can both decide to
+ * spawn — the loser's process then has no server.json pointing at it and
+ * leaks until the machine restarts. `wx` is an exclusive create: the
+ * filesystem itself guarantees only one caller can create this file when
+ * several race to do so, which is what makes the decision atomic.
+ *
+ * Returns true if this invocation won the race and should spawn the server;
+ * false if another invocation already holds a fresh lock and is doing it.
+ */
+async function acquireSpawnLock(stateDir: string): Promise<boolean> {
+  const lockPath = join(stateDir, LOCK_FILE);
+  const mine: SpawnLock = { pid: process.pid, at: new Date().toISOString() };
+
+  try {
+    await writeFile(lockPath, JSON.stringify(mine), { flag: 'wx' });
+    return true;
+  } catch (error) {
+    if (!isEExist(error)) throw error;
+  }
+
+  const raw = await readFile(lockPath, 'utf8').catch(() => null);
+  if (raw === null) {
+    // The holder released it between our failed create and this read.
+    return acquireSpawnLock(stateDir);
+  }
+
+  let other: Partial<SpawnLock> | null;
+  try {
+    other = JSON.parse(raw) as Partial<SpawnLock>;
+  } catch {
+    other = null;
+  }
+
+  const fresh = typeof other?.at === 'string' && Date.now() - Date.parse(other.at) < LOCK_STALE_MS;
+  const alive = typeof other?.pid === 'number' && isPidAlive(other.pid);
+  if (fresh && alive) return false;
+
+  // Stale or unreadable: the invocation that made it is gone or long past
+  // any reasonable spawn time. Take over rather than wait on it forever.
+  await rm(lockPath, { force: true });
+  return acquireSpawnLock(stateDir);
+}
+
+/** Only ever called by the invocation that acquired the lock — never by a loser waiting on it. */
+async function releaseSpawnLock(stateDir: string): Promise<void> {
+  await rm(join(stateDir, LOCK_FILE), { force: true });
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
 
   const root = await repoRoot({ cwd }).catch(() => null);
-  if (root === null) emit(errorResult('not a git repository'), 1);
+  if (root === null) {
+    emit(errorResult('not a git repository'), 1);
+    return;
+  }
 
   const gitDir = await resolveGitDir({ cwd: root });
   const stateDir = stateDirFor(gitDir);
@@ -190,15 +283,29 @@ async function main(): Promise<void> {
 
   if (options.stop) {
     const record = await readServerRecord(stateDir);
-    if (record) {
+    // A record can outlive its process (a crash, a reboot, a recycled pid).
+    // Reuse the same token-authenticated liveness check the re-attach path
+    // uses below, rather than signalling a bare pid: an unchecked
+    // `process.kill(record.pid)` could hit an unrelated process that
+    // happens to have reused that pid since the record was written.
+    const alive = record !== null && (await isServerAlive(record));
+
+    if (alive) {
       try {
         process.kill(record.pid);
       } catch {
         // Already gone.
       }
       await removeServerRecord(stateDir);
+      emit({ ...abortedResult(), message: 'server stopped' });
+      return;
     }
-    emit({ ...abortedResult(), message: 'server stopped' });
+
+    // Nothing alive to stop. Clear a stale record if one was left behind,
+    // and say so truthfully instead of claiming a stop that did not happen.
+    if (record) await removeServerRecord(stateDir);
+    emit({ ...abortedResult(), message: 'no server was running' });
+    return;
   }
 
   const existing = await readServerRecord(stateDir);
@@ -209,6 +316,7 @@ async function main(): Promise<void> {
     // can never return a stale outcome.
     const result = await waitForResult(stateDir, options.timeoutSeconds);
     emit(result ?? pendingResult(`http://127.0.0.1:${existing.port}/?t=${existing.token}`));
+    return;
   }
   await removeServerRecord(stateDir);
 
@@ -216,7 +324,10 @@ async function main(): Promise<void> {
   const range = await resolveRange(options.base === 'auto' ? request.base : options.base, { cwd: root });
 
   const files = await listChangedFiles(range, { cwd: root });
-  if (files.length === 0) emit(noChangesResult());
+  if (files.length === 0) {
+    emit(noChangesResult());
+    return;
+  }
 
   const state = await openRound(await readState(stateDir), request, linesLookup(range, root));
   await writeState(stateDir, state);
@@ -236,16 +347,35 @@ async function main(): Promise<void> {
   };
   await writeFile(join(stateDir, SESSION_FILE), JSON.stringify(session, null, 2), 'utf8');
 
-  spawn(process.execPath, [process.argv[1]!, '--__serve'], {
-    cwd: root,
-    detached: true,
-    stdio: 'ignore',
-  }).unref();
+  const shouldSpawn = await acquireSpawnLock(stateDir);
+  let serverRecord: Awaited<ReturnType<typeof readServerRecord>>;
+  if (shouldSpawn) {
+    try {
+      spawn(process.execPath, [process.argv[1]!, '--__serve'], {
+        cwd: root,
+        detached: true,
+        stdio: 'ignore',
+      }).unref();
+      serverRecord = await waitForRecord(stateDir);
+    } finally {
+      // Release unconditionally: a server that started successfully has
+      // already announced itself via server.json, and one that failed to
+      // start must not leave the lock behind for every later invocation to
+      // trip over.
+      await releaseSpawnLock(stateDir);
+    }
+  } else {
+    // Someone else is already spawning. Wait for the server.json they are
+    // about to write; their lock is theirs to release, not ours.
+    serverRecord = await waitForRecord(stateDir);
+  }
 
-  const record = await waitForRecord(stateDir);
-  if (!record) emit(errorResult('the review server failed to start'), 1);
+  if (!serverRecord) {
+    emit(errorResult('the review server failed to start'), 1);
+    return;
+  }
 
-  const url = `http://127.0.0.1:${record.port}/?t=${record.token}`;
+  const url = `http://127.0.0.1:${serverRecord.port}/?t=${serverRecord.token}`;
   if (options.open) openBrowser(url);
 
   const result = await waitForResult(stateDir, options.timeoutSeconds);

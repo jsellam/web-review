@@ -868,14 +868,16 @@ function linesLookup(range, cwd) {
 }
 function emit(result, code = 0) {
   process.stdout.write(`${frameResult(result)}
-`);
-  process.exit(code);
+`, () => process.exit(code));
 }
 function openBrowser(url) {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   try {
-    spawn(command, args, { detached: true, stdio: "ignore" }).unref();
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.on("error", () => {
+    });
+    child.unref();
   } catch {
   }
 }
@@ -927,11 +929,55 @@ async function waitForResult(stateDir, timeoutSeconds) {
   }
   return null;
 }
+var LOCK_FILE = "server.lock";
+var LOCK_STALE_MS = 1e4;
+function isEExist(error) {
+  return typeof error === "object" && error !== null && error.code === "EEXIST";
+}
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function acquireSpawnLock(stateDir) {
+  const lockPath = join6(stateDir, LOCK_FILE);
+  const mine = { pid: process.pid, at: (/* @__PURE__ */ new Date()).toISOString() };
+  try {
+    await writeFile3(lockPath, JSON.stringify(mine), { flag: "wx" });
+    return true;
+  } catch (error) {
+    if (!isEExist(error)) throw error;
+  }
+  const raw = await readFile6(lockPath, "utf8").catch(() => null);
+  if (raw === null) {
+    return acquireSpawnLock(stateDir);
+  }
+  let other;
+  try {
+    other = JSON.parse(raw);
+  } catch {
+    other = null;
+  }
+  const fresh = typeof other?.at === "string" && Date.now() - Date.parse(other.at) < LOCK_STALE_MS;
+  const alive = typeof other?.pid === "number" && isPidAlive(other.pid);
+  if (fresh && alive) return false;
+  await rm3(lockPath, { force: true });
+  return acquireSpawnLock(stateDir);
+}
+async function releaseSpawnLock(stateDir) {
+  await rm3(join6(stateDir, LOCK_FILE), { force: true });
+}
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
   const root = await repoRoot({ cwd }).catch(() => null);
-  if (root === null) emit(errorResult("not a git repository"), 1);
+  if (root === null) {
+    emit(errorResult("not a git repository"), 1);
+    return;
+  }
   const gitDir2 = await gitDir({ cwd: root });
   const stateDir = stateDirFor(gitDir2);
   if (options.serveInternal) {
@@ -939,26 +985,35 @@ async function main() {
     return;
   }
   if (options.stop) {
-    const record2 = await readServerRecord(stateDir);
-    if (record2) {
+    const record = await readServerRecord(stateDir);
+    const alive = record !== null && await isServerAlive(record);
+    if (alive) {
       try {
-        process.kill(record2.pid);
+        process.kill(record.pid);
       } catch {
       }
       await removeServerRecord(stateDir);
+      emit({ ...abortedResult(), message: "server stopped" });
+      return;
     }
-    emit({ ...abortedResult(), message: "server stopped" });
+    if (record) await removeServerRecord(stateDir);
+    emit({ ...abortedResult(), message: "no server was running" });
+    return;
   }
   const existing = await readServerRecord(stateDir);
   if (existing && await isServerAlive(existing)) {
     const result2 = await waitForResult(stateDir, options.timeoutSeconds);
     emit(result2 ?? pendingResult(`http://127.0.0.1:${existing.port}/?t=${existing.token}`));
+    return;
   }
   await removeServerRecord(stateDir);
   const request = await consumeRequest(stateDir);
   const range = await resolveRange(options.base === "auto" ? request.base : options.base, { cwd: root });
   const files = await listChangedFiles(range, { cwd: root });
-  if (files.length === 0) emit(noChangesResult());
+  if (files.length === 0) {
+    emit(noChangesResult());
+    return;
+  }
   const state = await openRound(await readState(stateDir), request, linesLookup(range, root));
   await writeState(stateDir, state);
   await rm3(join6(stateDir, RESULT_FILE), { force: true });
@@ -972,14 +1027,27 @@ async function main() {
     port: options.port
   };
   await writeFile3(join6(stateDir, SESSION_FILE), JSON.stringify(session, null, 2), "utf8");
-  spawn(process.execPath, [process.argv[1], "--__serve"], {
-    cwd: root,
-    detached: true,
-    stdio: "ignore"
-  }).unref();
-  const record = await waitForRecord(stateDir);
-  if (!record) emit(errorResult("the review server failed to start"), 1);
-  const url = `http://127.0.0.1:${record.port}/?t=${record.token}`;
+  const shouldSpawn = await acquireSpawnLock(stateDir);
+  let serverRecord;
+  if (shouldSpawn) {
+    try {
+      spawn(process.execPath, [process.argv[1], "--__serve"], {
+        cwd: root,
+        detached: true,
+        stdio: "ignore"
+      }).unref();
+      serverRecord = await waitForRecord(stateDir);
+    } finally {
+      await releaseSpawnLock(stateDir);
+    }
+  } else {
+    serverRecord = await waitForRecord(stateDir);
+  }
+  if (!serverRecord) {
+    emit(errorResult("the review server failed to start"), 1);
+    return;
+  }
+  const url = `http://127.0.0.1:${serverRecord.port}/?t=${serverRecord.token}`;
   if (options.open) openBrowser(url);
   const result = await waitForResult(stateDir, options.timeoutSeconds);
   emit(result ?? pendingResult(url));

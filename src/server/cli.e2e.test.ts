@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createRepo, type TestRepo } from './test-helpers/repo.js';
 import { parseFramed } from '../shared/protocol.js';
-import type { CliResult } from '../shared/types.js';
+import type { CliResult, SessionPayload } from '../shared/types.js';
 
 const run = promisify(execFile);
 const CLI = resolve('dist/web-review.mjs');
@@ -73,12 +74,12 @@ describe('the CLI', () => {
 
     const session = await fetch(`${url.origin}/api/session`, {
       headers: { 'x-review-token': token },
-    }).then((r) => r.json() as Promise<any>);
+    }).then((r) => r.json() as Promise<SessionPayload>);
 
     expect(session.summary).toBe('Change the return value.');
     expect(session.round).toBe(1);
     expect(session.files.map((f: { path: string }) => f.path)).toEqual(['src/auth.ts']);
-    expect(session.threads[0].messages[0]).toMatchObject({ author: 'agent', body: 'why 2?' });
+    expect(session.threads[0]!.messages[0]).toMatchObject({ author: 'agent', body: 'why 2?' });
 
     // The request file is consumed, so it cannot leak into a later round.
     await expect(readFile(join(stateDir, 'request.json'), 'utf8')).rejects.toThrow();
@@ -150,16 +151,98 @@ describe('the CLI', () => {
     const url2 = new URL(round2.url!);
     const session = await fetch(`${url2.origin}/api/session`, {
       headers: { 'x-review-token': url2.searchParams.get('t')! },
-    }).then((r) => r.json() as Promise<any>);
+    }).then((r) => r.json() as Promise<SessionPayload>);
 
     expect(session.round).toBe(2);
-    expect(session.threads[0].anchor.line).toBe(3);
-    expect(session.threads[0].status).toBe('open');
-    expect(session.threads[0].messages).toHaveLength(2);
-    expect(session.threads[0].messages[1]).toMatchObject({
+    expect(session.threads[0]!.anchor.line).toBe(3);
+    expect(session.threads[0]!.status).toBe('open');
+    expect(session.threads[0]!.messages).toHaveLength(2);
+    expect(session.threads[0]!.messages[1]).toMatchObject({
       author: 'agent',
       round: 2,
       body: 'Added a note.',
     });
   }, 30_000);
+
+  it('delivers a large result through a pipe without truncation', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const pending = await cli(['--no-open', '--timeout', '2']);
+    const url = new URL(pending.url!);
+    const token = url.searchParams.get('t')!;
+
+    // Comfortably past a pipe's kernel buffer (64-128KiB on common
+    // platforms) so a truncated write would be observable, with a marker at
+    // the very end so a partial delivery is caught rather than merely a
+    // shortened-but-still-valid-looking body.
+    const marker = 'END-OF-LARGE-BODY-MARKER';
+    const bigBody = 'x'.repeat(300_000) + marker;
+
+    const posted = await fetch(`${url.origin}/api/review`, {
+      method: 'POST',
+      headers: { 'x-review-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        verdict: 'comment',
+        general: '',
+        newComments: [{ file: 'src/auth.ts', side: 'new', line: 2, body: bigBody }],
+      }),
+    });
+    expect(posted.status).toBe(200);
+
+    const submitted = await cli(['--no-open', '--timeout', '10']);
+
+    expect(submitted.status).toBe('submitted');
+    expect(submitted.threads).toHaveLength(1);
+    const body = submitted.threads![0]!.messages[0]!.body;
+    expect(body).toHaveLength(bigBody.length);
+    expect(body.endsWith(marker)).toBe(true);
+  }, 30_000);
+
+  it('does not spawn a second server when a fresh lock is already held', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+    const stateDir = join(repo.dir, '.git', 'web-review');
+    await mkdir(stateDir, { recursive: true });
+
+    // Simulate another invocation that is mid-spawn: a lock naming a pid
+    // that is genuinely alive (this test process itself) and a timestamp
+    // from just now.
+    await writeFile(
+      join(stateDir, 'server.lock'),
+      JSON.stringify({ pid: process.pid, at: new Date().toISOString() }),
+      'utf8',
+    );
+
+    const result = await cli(['--no-open', '--timeout', '2']);
+
+    // With no real server ever spawned by either "invocation", this one must
+    // give up waiting for server.json rather than start its own — proving it
+    // deferred to the lock instead of racing past it.
+    expect(result).toEqual({ status: 'error', message: 'the review server failed to start' });
+    await expect(readFile(join(stateDir, 'server.json'), 'utf8')).rejects.toThrow();
+  }, 20_000);
+
+  it('still delivers a result when the platform has no browser opener', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    // Force a PATH containing only `git` (as a symlink to the real binary),
+    // so the browser-opener spawn (`open`/`xdg-open`) genuinely cannot find
+    // its executable, without breaking anything else the CLI shells out to.
+    const { stdout: gitPath } = await run('which', ['git']);
+    const binDir = await mkdtemp(join(tmpdir(), 'web-review-bin-'));
+    await symlink(gitPath.trim(), join(binDir, 'git'));
+
+    try {
+      // Deliberately omit --no-open: this exercises the real openBrowser()
+      // path, which previously crashed the whole process before any result
+      // was printed when the opener binary was missing.
+      const { stdout } = await run(process.execPath, [CLI, '--timeout', '2'], {
+        cwd: repo.dir,
+        env: { ...process.env, PATH: binDir },
+      }).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }));
+
+      expect(parseFramed(stdout).status).toBe('pending');
+    } finally {
+      await rm(binDir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
