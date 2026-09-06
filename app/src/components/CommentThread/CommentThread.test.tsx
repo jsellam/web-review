@@ -58,6 +58,20 @@ describe('CommentThread', () => {
     expect(useDraftStore.getState().resolved['t1']).toBe(false);
   });
 
+  it('clears the staged toggle when resolve is clicked and then undone', async () => {
+    render(<CommentThread thread={thread} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /^resolve$/i }));
+    expect(useDraftStore.getState().resolved['t1']).toBe(true);
+
+    // The button now reads "Reopen" because the staged state is resolved.
+    await userEvent.click(screen.getByRole('button', { name: /reopen/i }));
+
+    expect(useDraftStore.getState().resolved).toEqual({});
+    expect(screen.queryByText(/will be resolved/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/will be reopened/i)).not.toBeInTheDocument();
+  });
+
   it('marks an outdated thread and still shows its messages', () => {
     render(<CommentThread thread={{ ...thread, status: 'outdated' }} />);
 

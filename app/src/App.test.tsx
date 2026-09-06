@@ -25,7 +25,7 @@ const session: SessionPayload = {
 const api: ReviewApi = {
   getSession: vi.fn().mockResolvedValue(session),
   getFile: vi.fn().mockResolvedValue(null),
-  submit: vi.fn().mockResolvedValue(undefined),
+  submit: vi.fn().mockResolvedValue({ unanchored: [] }),
 };
 
 beforeAll(() => {
@@ -73,5 +73,25 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: /submit review/i }));
 
     expect(await screen.findByText('Review submitted')).toBeInTheDocument();
+  });
+
+  it('warns about comments the server could not anchor, instead of hiding the loss', async () => {
+    useDraftStore.getState().reset();
+    useDraftStore.getState().setComment('src/auth.ts', 'new', 2, 'rename this');
+    const droppedApi: ReviewApi = {
+      ...api,
+      submit: vi.fn().mockResolvedValue({
+        unanchored: [{ file: 'src/auth.ts', side: 'new', line: 2, body: 'rename this' }],
+      }),
+    };
+
+    render(<App api={droppedApi} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /submit review/i }));
+
+    expect(await screen.findByText('Review submitted')).toBeInTheDocument();
+    expect(screen.getByText(/1 comment could not be placed/i)).toBeInTheDocument();
+    expect(screen.getByText(/rename this/)).toBeInTheDocument();
   });
 });

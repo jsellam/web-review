@@ -45,6 +45,16 @@ describe('submittedResult', () => {
 
     expect(submittedResult(mixed, 'approve', '').threads).toHaveLength(2);
   });
+
+  it('omits unanchored entirely when nothing was dropped', () => {
+    expect(submittedResult(state, 'approve', '')).not.toHaveProperty('unanchored');
+  });
+
+  it('carries comments that could not be anchored, so the agent learns they were dropped', () => {
+    const unanchored = [{ file: 'b.ts', side: 'new' as const, line: 42, body: 'orphaned' }];
+
+    expect(submittedResult(state, 'comment', '', unanchored)).toMatchObject({ unanchored });
+  });
 });
 
 describe('the non-submitted results', () => {

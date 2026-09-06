@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { Alert, Button, Drawer, Input, Radio, Space, Typography } from 'antd';
 import { buildSubmit, useDraftStore } from '../../state/draft.js';
 import { ApiError, type ReviewApi } from '../../api/client.js';
-import type { Verdict } from '../../../../src/shared/types.js';
+import type { NewComment, Verdict } from '../../../../src/shared/types.js';
 
 interface Props {
   api: ReviewApi;
   open: boolean;
   onClose(): void;
-  onSubmitted(): void;
+  /** `unanchored` lists any new comments the server could not place on a line. */
+  onSubmitted(unanchored: NewComment[]): void;
 }
 
 function describeDrafts(comments: number, replies: number, toggles: number): string {
@@ -37,15 +38,17 @@ export function SubmitDrawer({ api, open, onClose, onSubmitted }: Props) {
     setSending(true);
     setError(null);
     try {
-      await api.submit(buildSubmit(useDraftStore.getState(), verdict));
-      onSubmitted();
+      const { unanchored } = await api.submit(buildSubmit(useDraftStore.getState(), verdict));
+      onSubmitted(unanchored);
     } catch (cause) {
       // The server rejects a second submission with 409, because re-applying
       // drafts twice would duplicate the reviewer's threads. If we get here,
       // the review already landed once — that is a success from this page's
-      // point of view, not a failure to report.
+      // point of view, not a failure to report. A retry after 409 cannot
+      // recover which comments (if any) were unanchored the first time, but
+      // that response is long gone by now regardless.
       if (cause instanceof ApiError && cause.status === 409) {
-        onSubmitted();
+        onSubmitted([]);
         return;
       }
       setError(cause instanceof Error ? cause.message : 'submission failed');

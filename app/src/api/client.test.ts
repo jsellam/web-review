@@ -41,7 +41,7 @@ describe('createApi', () => {
   });
 
   it('POSTs a submission as JSON', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(ok({ ok: true }));
+    const fetchImpl = vi.fn().mockResolvedValue(ok({ ok: true, unanchored: [] }));
     const payload = {
       verdict: 'approve' as const,
       general: '',
@@ -58,6 +58,23 @@ describe('createApi', () => {
       headers: { 'x-review-token': 'tok', 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
+  });
+
+  it('surfaces comments the server could not anchor, instead of discarding them', async () => {
+    const unanchored = [{ file: 'a.ts', side: 'new' as const, line: 5, body: 'orphaned' }];
+    const fetchImpl = vi.fn().mockResolvedValue(ok({ ok: true, unanchored }));
+    const payload = {
+      verdict: 'approve' as const,
+      general: '',
+      newComments: [],
+      replies: [],
+      resolved: [],
+      reopened: [],
+    };
+
+    const result = await createApi('tok', fetchImpl as unknown as typeof fetch).submit(payload);
+
+    expect(result).toEqual({ unanchored });
   });
 
   it('throws ApiError carrying the status and the server message', async () => {

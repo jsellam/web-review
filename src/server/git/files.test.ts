@@ -1,7 +1,10 @@
+import { rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRepo, type TestRepo } from '../test-helpers/repo.js';
 import { resolveRange } from './range.js';
-import { listChangedFiles, readSide } from './files.js';
+import { listChangedFiles, readSide, renameMap } from './files.js';
 
 const NUL = '\u0000';
 let repo: TestRepo;
@@ -102,7 +105,39 @@ describe('listChangedFiles', () => {
   });
 });
 
+describe('renameMap', () => {
+  it('maps a renamed file to its old path', () => {
+    const files = [
+      { path: 'src/renamed.ts', oldPath: 'src/keep.ts', status: 'renamed' as const,
+        additions: 0, deletions: 0, binary: false },
+      { path: 'src/other.ts', oldPath: 'src/other.ts', status: 'modified' as const,
+        additions: 0, deletions: 0, binary: false },
+    ];
+
+    const map = renameMap(files);
+    expect(map.get('src/renamed.ts')).toBe('src/keep.ts');
+    expect(map.has('src/other.ts')).toBe(false);
+  });
+});
+
 describe('readSide', () => {
+  it('rejects a path that resolves outside the repository root', async () => {
+    const range = await resolveRange('HEAD', { cwd: repo.dir });
+
+    // Compute the exact traversal from repo.dir to a real file outside it,
+    // rather than guessing a fixed number of `..` segments — the right count
+    // depends on how deep the OS puts temp directories, which varies by platform.
+    const outside = join(tmpdir(), `web-review-outside-${process.pid}.txt`);
+    await writeFile(outside, 'secret\n', 'utf8');
+    try {
+      const traversal = relative(repo.dir, outside);
+      expect(await readSide(traversal, 'new', range, { cwd: repo.dir })).toBeNull();
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+
+
   it('reads the old side from the base commit', async () => {
     await repo.write('src/keep.ts', 'changed\n');
     const range = await resolveRange('HEAD', { cwd: repo.dir });

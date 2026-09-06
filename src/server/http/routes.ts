@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isHostAllowed, isTokenValid, TOKEN_HEADER } from './security.js';
 import { RequestError, validateSubmit } from '../review/request.js';
-import type { SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
+import type { NewComment, SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
 
 /**
  * Thrown by RouteDeps.submit when a submission is rejected because one is
@@ -16,8 +16,7 @@ export interface RouteDeps {
   port: number;
   getSession(): Promise<SessionPayload>;
   getFile(path: string, side: Side): Promise<string | null>;
-  submit(payload: SubmitPayload): Promise<void>;
-  waitForSubmission(timeoutMs: number): Promise<boolean>;
+  submit(payload: SubmitPayload): Promise<{ unanchored: NewComment[] }>;
 }
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -94,17 +93,10 @@ export async function handleApi(
       return true;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/wait') {
-      const seconds = Number(url.searchParams.get('timeout') ?? '30');
-      const bounded = Number.isFinite(seconds) ? Math.min(Math.max(seconds, 1), 600) : 30;
-      sendJson(res, 200, { submitted: await deps.waitForSubmission(bounded * 1000) });
-      return true;
-    }
-
     if (req.method === 'POST' && url.pathname === '/api/review') {
       const payload = validateSubmit(await readBody(req));
-      await deps.submit(payload);
-      sendJson(res, 200, { ok: true });
+      const { unanchored } = await deps.submit(payload);
+      sendJson(res, 200, { ok: true, unanchored });
       return true;
     }
 

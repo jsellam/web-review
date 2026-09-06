@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { frameResult } from '../shared/protocol.js';
 import { gitDir as resolveGitDir, repoRoot } from './git/exec.js';
 import { resolveRange, type DiffRange } from './git/range.js';
-import { listChangedFiles, readSide } from './git/files.js';
-import { consumeRequest } from './review/request.js';
+import { listChangedFiles, readSide, renameMap } from './git/files.js';
+import { readRequest, REQUEST_FILE } from './review/request.js';
 import { splitLines } from './review/anchor.js';
 import {
   applySubmission,
@@ -30,7 +30,7 @@ import {
   removeServerRecord,
   startServer,
 } from './http/server.js';
-import type { CliResult, SessionPayload } from '../shared/types.js';
+import type { CliResult, FileEntry, SessionPayload } from '../shared/types.js';
 
 export const RESULT_FILE = 'result.json';
 export const SESSION_FILE = 'session.json';
@@ -85,12 +85,23 @@ interface SessionFile {
   port: number;
 }
 
-function linesLookup(range: DiffRange, cwd: string): LinesLookup {
+/**
+ * `Thread.file` (and `NewComment.file`) always store a file's NEW path, even
+ * for an old-side comment — the browser has no other way to key a thread
+ * that must keep rendering under the same file across rounds (see
+ * `extendData.ts`'s `thread.file !== filePath` filter). An old-side lookup
+ * therefore has to translate through `renames` before asking git for the
+ * content: the file never existed at the new path in `range.base`.
+ */
+function linesLookup(range: DiffRange, cwd: string, files: FileEntry[] = []): LinesLookup {
+  const renames = renameMap(files);
   return async (file, side) => {
-    const content = await readSide(file, side, range, { cwd });
+    const path = side === 'old' ? (renames.get(file) ?? file) : file;
+    const content = await readSide(path, side, range, { cwd });
     return content === null ? null : splitLines(content);
   };
 }
+
 
 /**
  * Write the framed result and exit only once it has actually been flushed.
@@ -140,7 +151,6 @@ const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 async function serveMain(cwd: string, stateDir: string): Promise<void> {
   const session = JSON.parse(await readFile(join(stateDir, SESSION_FILE), 'utf8')) as SessionFile;
   const range: DiffRange = { base: session.base, label: session.label, staged: session.staged };
-  const lookup = linesLookup(range, cwd);
 
   const handle = await startServer({
     staticRoot: join(moduleDir, '..', 'app', 'dist'),
@@ -159,15 +169,30 @@ async function serveMain(cwd: string, stateDir: string): Promise<void> {
       };
     },
     getFile: async (path, side) => readSide(path, side, range, { cwd }),
-    onSubmit: async (payload) => {
+    onSubmit: async (payload, markPersisted) => {
+      const files = await listChangedFiles(range, { cwd });
+      const lookup = linesLookup(range, cwd, files);
       const state = await readState(stateDir);
-      const next = await applySubmission(state, payload, lookup);
+      const { state: next, unanchored } = await applySubmission(state, payload, lookup);
+      const result = submittedResult(next, payload.verdict, payload.general, unanchored);
+
+      // Stage the result's content on disk before touching state.json at
+      // all: writing content (not a rename) is the step that can actually
+      // fail — a full disk, a killed process mid-write — so doing it first
+      // means such a failure leaves nothing changed, and the browser's retry
+      // can safely re-run the whole submission from scratch.
+      const resultTemp = join(stateDir, `${RESULT_FILE}.tmp`);
+      await writeFile(resultTemp, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+
       await writeState(stateDir, next);
-      await writeFile(
-        join(stateDir, RESULT_FILE),
-        JSON.stringify(submittedResult(next, payload.verdict, payload.general), null, 2),
-        'utf8',
-      );
+      // The submission is now durable. From this point on a retry must never
+      // be allowed to re-run it — even if the rename just below somehow
+      // fails — because that would re-apply it on top of the state just
+      // written and duplicate every new thread and reply.
+      markPersisted();
+      await rename(resultTemp, join(stateDir, RESULT_FILE));
+
+      return { unanchored };
     },
   });
 
@@ -182,8 +207,12 @@ async function waitForResult(stateDir: string, timeoutSeconds: number): Promise<
   while (Date.now() < deadline) {
     const raw = await readFile(join(stateDir, RESULT_FILE), 'utf8').catch(() => null);
     if (raw !== null) {
+      // Parse before deleting: result.json is now written via temp-plus-rename,
+      // so a torn read should not happen, but a reader must still never lose
+      // the file to a parse failure it could otherwise recover from by retrying.
+      const parsed = JSON.parse(raw) as CliResult;
       await rm(join(stateDir, RESULT_FILE), { force: true });
-      return JSON.parse(raw) as CliResult;
+      return parsed;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -331,12 +360,22 @@ async function main(): Promise<void> {
   // for a review that had already finished.
   const unconsumed = await readFile(join(stateDir, RESULT_FILE), 'utf8').catch(() => null);
   if (unconsumed !== null) {
+    // Parse before deleting: losing the file to a parse failure would throw
+    // away a submission that already fully landed, with no way to recover it.
+    const parsed = JSON.parse(unconsumed) as CliResult;
     await rm(join(stateDir, RESULT_FILE), { force: true });
-    emit(JSON.parse(unconsumed) as CliResult);
+    emit(parsed);
     return;
   }
 
-  const request = await consumeRequest(stateDir);
+  // Read but do not yet delete request.json: everything between here and the
+  // writeState call below can fail (a bad --base, resolveRange, an empty
+  // diff) and end the invocation before the round is durable. Deleting only
+  // after writeState succeeds means every one of those earlier failures
+  // leaves the agent's summary and annotations in place to retry — a
+  // malformed request.json is already left in place by readRequest itself
+  // (it throws before returning), so this keeps both cases consistent.
+  const request = await readRequest(stateDir);
   const range = await resolveRange(options.base === 'auto' ? request.base : options.base, { cwd: root });
 
   const files = await listChangedFiles(range, { cwd: root });
@@ -345,8 +384,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const state = await openRound(await readState(stateDir), request, linesLookup(range, root));
+  const state = await openRound(await readState(stateDir), request, linesLookup(range, root, files));
   await writeState(stateDir, state);
+  // request.json has now been durably folded into state.json: only past this
+  // point is it safe to consume, so a crash or bad exit before here can never
+  // lose it.
+  await rm(join(stateDir, REQUEST_FILE), { force: true });
   // Delete any leftover result.json from a previous round before spawning the
   // new server, so a crash-recovery read of this round can never pick up an
   // outcome that belongs to a round that already finished. (Any genuinely
@@ -394,7 +437,15 @@ async function main(): Promise<void> {
   }
 
   const url = `http://127.0.0.1:${serverRecord.port}/?t=${serverRecord.token}`;
-  if (options.open) openBrowser(url);
+  if (options.open) {
+    openBrowser(url);
+  } else {
+    // README.md documents --no-open as printing the URL instead of opening a
+    // browser. Without this, the URL would only ever appear once --timeout
+    // elapses and this prints a `pending` result — stderr, not stdout, so it
+    // never mixes with the framed JSON contract an agent parses from stdout.
+    process.stderr.write(`${url}\n`);
+  }
 
   const result = await waitForResult(stateDir, options.timeoutSeconds);
   emit(result ?? pendingResult(url));

@@ -4,6 +4,7 @@ import { contextHash, makeAnchor, relocate } from './anchor.js';
 import { isENOENT } from './request.js';
 import type {
   Message,
+  NewComment,
   ReviewRequest,
   ReviewState,
   Side,
@@ -34,13 +35,30 @@ export async function readState(stateDir: string): Promise<ReviewState> {
     throw error;
   }
 
+  const path = join(stateDir, STATE_FILE);
+  let parsed: ReviewState;
   try {
-    const parsed = JSON.parse(raw) as ReviewState;
-    if (parsed.version !== 1 || !Array.isArray(parsed.threads)) return emptyState();
-    return parsed;
-  } catch {
-    return emptyState();
+    parsed = JSON.parse(raw) as ReviewState;
+  } catch (error) {
+    // Returning an empty state here would look like an ordinary read to the
+    // caller; the next writeState would then persist that empty state,
+    // permanently destroying every thread from every round with no error.
+    // Surface the failure instead of masking it — the same principle commit
+    // 59bd78b already applied to the read-error branch above.
+    throw new Error(
+      `web-review: ${path} is not valid JSON and was left in place; refusing to discard its contents. (${
+        error instanceof Error ? error.message : String(error)
+      })`,
+    );
   }
+
+  if (parsed.version !== 1 || !Array.isArray(parsed.threads)) {
+    throw new Error(
+      `web-review: ${path} has an unrecognised shape (version ${JSON.stringify((parsed as { version?: unknown }).version)}) and was left in place; refusing to discard its contents.`,
+    );
+  }
+
+  return parsed;
 }
 
 export async function writeState(stateDir: string, state: ReviewState): Promise<void> {
@@ -120,14 +138,30 @@ export async function openRound(
   return { version: 1, round, threads };
 }
 
+export interface ApplySubmissionResult {
+  state: ReviewState;
+  /**
+   * New comments whose line could not be found in the current file contents
+   * — a race between the diff shown to the reviewer and the files on disk,
+   * or (before the rename fix) an old-side comment on a renamed file. These
+   * are never silently dropped: `openRound` marks the analogous case
+   * (a thread that can no longer be relocated) `outdated` rather than
+   * deleting it, and a new comment that cannot even be anchored once
+   * deserves the same visibility, not less — the caller surfaces this list
+   * to both the reviewer's response and the agent's `CliResult`.
+   */
+  unanchored: NewComment[];
+}
+
 /** Fold the human's submission into the state. New comments are anchored here. */
 export async function applySubmission(
   state: ReviewState,
   payload: SubmitPayload,
   lookup: LinesLookup,
   now: () => string = nowIso,
-): Promise<ReviewState> {
+): Promise<ApplySubmissionResult> {
   const threads = state.threads.map((thread) => ({ ...thread }));
+  const unanchored: NewComment[] = [];
 
   for (const reply of payload.replies) {
     const thread = threads.find((t) => t.id === reply.threadId);
@@ -148,7 +182,10 @@ export async function applySubmission(
 
   for (const comment of payload.newComments) {
     const lines = await lookup(comment.file, comment.side);
-    if (!lines || lines[comment.line - 1] === undefined) continue;
+    if (!lines || lines[comment.line - 1] === undefined) {
+      unanchored.push(comment);
+      continue;
+    }
 
     threads.push({
       id: nextId(threads),
@@ -160,7 +197,7 @@ export async function applySubmission(
     });
   }
 
-  return { ...state, threads };
+  return { state: { ...state, threads }, unanchored };
 }
 
 function message(

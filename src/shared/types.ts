@@ -103,4 +103,6 @@ export interface CliResult {
   threads?: Thread[];
   url?: string;
   message?: string;
+  /** New comments that could not be anchored to a line and were dropped from `threads`. */
+  unanchored?: NewComment[];
 }

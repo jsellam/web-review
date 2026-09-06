@@ -17,7 +17,7 @@ beforeEach(() => {
 
 describe('SubmitDrawer', () => {
   it('sends the drafted comments with the chosen verdict', async () => {
-    const submit = vi.fn().mockResolvedValue(undefined);
+    const submit = vi.fn().mockResolvedValue({ unanchored: [] });
     useDraftStore.getState().setComment('src/a.ts', 'new', 12, 'rename this');
 
     render(<SubmitDrawer api={apiWith(submit)} open onClose={vi.fn()} onSubmitted={vi.fn()} />);
@@ -39,7 +39,7 @@ describe('SubmitDrawer', () => {
   });
 
   it('defaults to comment and can approve with nothing drafted', async () => {
-    const submit = vi.fn().mockResolvedValue(undefined);
+    const submit = vi.fn().mockResolvedValue({ unanchored: [] });
 
     render(<SubmitDrawer api={apiWith(submit)} open onClose={vi.fn()} onSubmitted={vi.fn()} />);
 
@@ -76,7 +76,7 @@ describe('SubmitDrawer', () => {
 
     render(
       <SubmitDrawer
-        api={apiWith(vi.fn().mockResolvedValue(undefined))}
+        api={apiWith(vi.fn().mockResolvedValue({ unanchored: [] }))}
         open
         onClose={vi.fn()}
         onSubmitted={onSubmitted}
@@ -103,8 +103,8 @@ describe('SubmitDrawer', () => {
     let resolveSubmit: () => void = () => {};
     const submit = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
-          resolveSubmit = resolve;
+        new Promise<{ unanchored: [] }>((resolve) => {
+          resolveSubmit = () => resolve({ unanchored: [] });
         }),
     );
 

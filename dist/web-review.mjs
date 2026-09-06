@@ -2,7 +2,7 @@
 
 // src/server/cli.ts
 import { spawn } from "node:child_process";
-import { readFile as readFile6, rm as rm3, writeFile as writeFile3 } from "node:fs/promises";
+import { readFile as readFile6, rename as rename2, rm as rm3, writeFile as writeFile3 } from "node:fs/promises";
 import { join as join6 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -96,8 +96,8 @@ async function resolveRange(spec, opts) {
 }
 
 // src/server/git/files.ts
-import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 var NUL = "\0";
 function diffArgs(range, extra) {
   return range.staged ? ["diff", "--cached", "-M", "-z", ...extra, range.base] : ["diff", "-M", "-z", ...extra, range.base];
@@ -209,6 +209,13 @@ function countLines(content) {
   const lines = content.split("\n");
   return content.endsWith("\n") ? lines.length - 1 : lines.length;
 }
+function renameMap(files) {
+  const map = /* @__PURE__ */ new Map();
+  for (const file of files) {
+    if (file.status === "renamed" && file.oldPath) map.set(file.path, file.oldPath);
+  }
+  return map;
+}
 async function readSide(path, side, range, opts) {
   if (side === "old") {
     const refExists = await gitOk(
@@ -228,9 +235,16 @@ async function readSide(path, side, range, opts) {
     if (!exists) return null;
     return gitRaw(["show", `:${path}`], opts);
   }
-  const full = join(opts.cwd, path);
+  const root = resolve(opts.cwd);
+  const full = resolve(root, path);
+  if (full !== root && !full.startsWith(root + sep)) return null;
   const info = await stat(full).catch(() => null);
   if (!info?.isFile()) return null;
+  const [realRoot, real] = await Promise.all([
+    realpath(root).catch(() => root),
+    realpath(full).catch(() => null)
+  ]);
+  if (real === null || real !== realRoot && !real.startsWith(realRoot + sep)) return null;
   return readFile(full, "utf8");
 }
 
@@ -317,11 +331,6 @@ async function readRequest(stateDir) {
     throw new RequestError("request.json is not valid JSON");
   }
   return validateRequest(parsed);
-}
-async function consumeRequest(stateDir) {
-  const request = await readRequest(stateDir);
-  await rm(join2(stateDir, REQUEST_FILE), { force: true });
-  return request;
 }
 var VERDICTS = ["approve", "request_changes", "comment"];
 function asVerdict(value) {
@@ -416,13 +425,21 @@ async function readState(stateDir) {
     if (isENOENT(error)) return emptyState();
     throw error;
   }
+  const path = join3(stateDir, STATE_FILE);
+  let parsed;
   try {
-    const parsed = JSON.parse(raw);
-    if (parsed.version !== 1 || !Array.isArray(parsed.threads)) return emptyState();
-    return parsed;
-  } catch {
-    return emptyState();
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `web-review: ${path} is not valid JSON and was left in place; refusing to discard its contents. (${error instanceof Error ? error.message : String(error)})`
+    );
   }
+  if (parsed.version !== 1 || !Array.isArray(parsed.threads)) {
+    throw new Error(
+      `web-review: ${path} has an unrecognised shape (version ${JSON.stringify(parsed.version)}) and was left in place; refusing to discard its contents.`
+    );
+  }
+  return parsed;
 }
 async function writeState(stateDir, state) {
   await mkdir(stateDir, { recursive: true });
@@ -484,6 +501,7 @@ async function openRound(state, request, lookup, now = nowIso) {
 }
 async function applySubmission(state, payload, lookup, now = nowIso) {
   const threads = state.threads.map((thread) => ({ ...thread }));
+  const unanchored = [];
   for (const reply of payload.replies) {
     const thread = threads.find((t) => t.id === reply.threadId);
     if (thread) {
@@ -500,7 +518,10 @@ async function applySubmission(state, payload, lookup, now = nowIso) {
   }
   for (const comment of payload.newComments) {
     const lines = await lookup(comment.file, comment.side);
-    if (!lines || lines[comment.line - 1] === void 0) continue;
+    if (!lines || lines[comment.line - 1] === void 0) {
+      unanchored.push(comment);
+      continue;
+    }
     threads.push({
       id: nextId(threads),
       file: comment.file,
@@ -510,20 +531,21 @@ async function applySubmission(state, payload, lookup, now = nowIso) {
       messages: [message("user", state.round, comment.body, now)]
     });
   }
-  return { ...state, threads };
+  return { state: { ...state, threads }, unanchored };
 }
 function message(author, round, body, now) {
   return { author, round, body, at: now() };
 }
 
 // src/server/review/result.ts
-function submittedResult(state, verdict, general) {
+function submittedResult(state, verdict, general, unanchored = []) {
   return {
     status: "submitted",
     verdict,
     round: state.round,
     general,
-    threads: state.threads
+    threads: state.threads,
+    ...unanchored.length > 0 ? { unanchored } : {}
   };
 }
 function pendingResult(url) {
@@ -624,16 +646,10 @@ async function handleApi(req, res, deps) {
       sendJson(res, 200, { content });
       return true;
     }
-    if (req.method === "GET" && url.pathname === "/api/wait") {
-      const seconds = Number(url.searchParams.get("timeout") ?? "30");
-      const bounded = Number.isFinite(seconds) ? Math.min(Math.max(seconds, 1), 600) : 30;
-      sendJson(res, 200, { submitted: await deps.waitForSubmission(bounded * 1e3) });
-      return true;
-    }
     if (req.method === "POST" && url.pathname === "/api/review") {
       const payload = validateSubmit(await readBody(req));
-      await deps.submit(payload);
-      sendJson(res, 200, { ok: true });
+      const { unanchored } = await deps.submit(payload);
+      sendJson(res, 200, { ok: true, unanchored });
       return true;
     }
     sendJson(res, 404, { error: "unknown endpoint" });
@@ -647,8 +663,8 @@ async function handleApi(req, res, deps) {
 }
 
 // src/server/http/static.ts
-import { readFile as readFile4, realpath } from "node:fs/promises";
-import { extname, join as join4, normalize, resolve, sep } from "node:path";
+import { readFile as readFile4, realpath as realpath2 } from "node:fs/promises";
+import { extname, join as join4, normalize, resolve as resolve2, sep as sep2 } from "node:path";
 var CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -676,15 +692,15 @@ function resolveStaticPath(root, urlPath) {
   if (firstSegment === "..") {
     return null;
   }
-  const full = resolve(root, relative);
-  const rootResolved = resolve(root);
-  if (full !== rootResolved && !full.startsWith(rootResolved + sep)) return null;
+  const full = resolve2(root, relative);
+  const rootResolved = resolve2(root);
+  if (full !== rootResolved && !full.startsWith(rootResolved + sep2)) return null;
   return full;
 }
 async function verifyPathContainment(root, path) {
   try {
-    const [realRoot, realPath] = await Promise.all([realpath(root), realpath(path)]);
-    return realPath === realRoot || realPath.startsWith(realRoot + sep);
+    const [realRoot, realPath] = await Promise.all([realpath2(root), realpath2(path)]);
+    return realPath === realRoot || realPath.startsWith(realRoot + sep2);
   } catch {
     return true;
   }
@@ -714,12 +730,12 @@ async function startServer(options) {
   let submitting = false;
   const waiters = /* @__PURE__ */ new Set();
   let port = options.port;
-  const waitForSubmission = (timeoutMs) => new Promise((resolve2) => {
-    if (submitted) return resolve2(true);
+  const waitForSubmission = (timeoutMs) => new Promise((resolve3) => {
+    if (submitted) return resolve3(true);
     const settle = (value) => {
       clearTimeout(timer);
       waiters.delete(settle);
-      resolve2(value);
+      resolve3(value);
     };
     const timer = setTimeout(() => settle(false), timeoutMs);
     timer.unref?.();
@@ -733,7 +749,6 @@ async function startServer(options) {
           port,
           getSession: options.getSession,
           getFile: options.getFile,
-          waitForSubmission,
           // This server is the single writer for its repository for the lifetime
           // of one review: server.json plus isServerAlive's liveness check are
           // what prevent a second server process from starting concurrently
@@ -747,15 +762,21 @@ async function startServer(options) {
               throw new SubmissionConflictError("a review has already been submitted");
             }
             submitting = true;
+            let persisted = false;
+            let result;
             try {
-              await options.onSubmit(payload);
+              result = await options.onSubmit(payload, () => {
+                persisted = true;
+                submitted = true;
+              });
             } catch (error) {
-              submitting = false;
+              if (!persisted) submitting = false;
               throw error;
             }
             submitting = false;
             submitted = true;
             for (const waiter of [...waiters]) waiter(true);
+            return result;
           }
         };
         if (await handleApi(req, res, deps)) return;
@@ -777,9 +798,9 @@ async function startServer(options) {
       }
     })();
   });
-  await new Promise((resolve2, reject) => {
+  await new Promise((resolve3, reject) => {
     server.once("error", reject);
-    server.listen(options.port, "127.0.0.1", resolve2);
+    server.listen(options.port, "127.0.0.1", resolve3);
   });
   const address = server.address();
   port = typeof address === "object" && address ? address.port : options.port;
@@ -796,7 +817,7 @@ async function startServer(options) {
     waitForSubmission,
     async close() {
       await removeServerRecord(options.stateDir);
-      await new Promise((resolve2) => server.close(() => resolve2()));
+      await new Promise((resolve3) => server.close(() => resolve3()));
     }
   };
 }
@@ -824,7 +845,8 @@ async function isServerAlive(record) {
     return false;
   }
   const response = await fetch(`http://127.0.0.1:${record.port}/api/session`, {
-    headers: { "x-review-token": record.token }
+    headers: { "x-review-token": record.token },
+    signal: AbortSignal.timeout(5e3)
   }).catch(() => null);
   return response?.ok === true;
 }
@@ -860,9 +882,11 @@ function parseArgs(argv) {
   }
   return options;
 }
-function linesLookup(range, cwd) {
+function linesLookup(range, cwd, files = []) {
+  const renames = renameMap(files);
   return async (file, side) => {
-    const content = await readSide(file, side, range, { cwd });
+    const path = side === "old" ? renames.get(file) ?? file : file;
+    const content = await readSide(path, side, range, { cwd });
     return content === null ? null : splitLines(content);
   };
 }
@@ -885,7 +909,6 @@ var moduleDir = fileURLToPath(new URL(".", import.meta.url));
 async function serveMain(cwd, stateDir) {
   const session = JSON.parse(await readFile6(join6(stateDir, SESSION_FILE), "utf8"));
   const range = { base: session.base, label: session.label, staged: session.staged };
-  const lookup = linesLookup(range, cwd);
   const handle = await startServer({
     staticRoot: join6(moduleDir, "..", "app", "dist"),
     stateDir,
@@ -903,15 +926,19 @@ async function serveMain(cwd, stateDir) {
       };
     },
     getFile: async (path, side) => readSide(path, side, range, { cwd }),
-    onSubmit: async (payload) => {
+    onSubmit: async (payload, markPersisted) => {
+      const files = await listChangedFiles(range, { cwd });
+      const lookup = linesLookup(range, cwd, files);
       const state = await readState(stateDir);
-      const next = await applySubmission(state, payload, lookup);
+      const { state: next, unanchored } = await applySubmission(state, payload, lookup);
+      const result = submittedResult(next, payload.verdict, payload.general, unanchored);
+      const resultTemp = join6(stateDir, `${RESULT_FILE}.tmp`);
+      await writeFile3(resultTemp, `${JSON.stringify(result, null, 2)}
+`, "utf8");
       await writeState(stateDir, next);
-      await writeFile3(
-        join6(stateDir, RESULT_FILE),
-        JSON.stringify(submittedResult(next, payload.verdict, payload.general), null, 2),
-        "utf8"
-      );
+      markPersisted();
+      await rename2(resultTemp, join6(stateDir, RESULT_FILE));
+      return { unanchored };
     }
   });
   await handle.waitForSubmission(24 * 60 * 60 * 1e3);
@@ -922,10 +949,11 @@ async function waitForResult(stateDir, timeoutSeconds) {
   while (Date.now() < deadline) {
     const raw = await readFile6(join6(stateDir, RESULT_FILE), "utf8").catch(() => null);
     if (raw !== null) {
+      const parsed = JSON.parse(raw);
       await rm3(join6(stateDir, RESULT_FILE), { force: true });
-      return JSON.parse(raw);
+      return parsed;
     }
-    await new Promise((resolve2) => setTimeout(resolve2, 250));
+    await new Promise((resolve3) => setTimeout(resolve3, 250));
   }
   return null;
 }
@@ -1009,19 +1037,21 @@ async function main() {
   await removeServerRecord(stateDir);
   const unconsumed = await readFile6(join6(stateDir, RESULT_FILE), "utf8").catch(() => null);
   if (unconsumed !== null) {
+    const parsed = JSON.parse(unconsumed);
     await rm3(join6(stateDir, RESULT_FILE), { force: true });
-    emit(JSON.parse(unconsumed));
+    emit(parsed);
     return;
   }
-  const request = await consumeRequest(stateDir);
+  const request = await readRequest(stateDir);
   const range = await resolveRange(options.base === "auto" ? request.base : options.base, { cwd: root });
   const files = await listChangedFiles(range, { cwd: root });
   if (files.length === 0) {
     emit(noChangesResult());
     return;
   }
-  const state = await openRound(await readState(stateDir), request, linesLookup(range, root));
+  const state = await openRound(await readState(stateDir), request, linesLookup(range, root, files));
   await writeState(stateDir, state);
+  await rm3(join6(stateDir, REQUEST_FILE), { force: true });
   await rm3(join6(stateDir, RESULT_FILE), { force: true });
   const token = makeToken();
   const session = {
@@ -1054,7 +1084,12 @@ async function main() {
     return;
   }
   const url = `http://127.0.0.1:${serverRecord.port}/?t=${serverRecord.token}`;
-  if (options.open) openBrowser(url);
+  if (options.open) {
+    openBrowser(url);
+  } else {
+    process.stderr.write(`${url}
+`);
+  }
   const result = await waitForResult(stateDir, options.timeoutSeconds);
   emit(result ?? pendingResult(url));
 }
@@ -1062,7 +1097,7 @@ async function waitForRecord(stateDir) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const record = await readServerRecord(stateDir);
     if (record) return record;
-    await new Promise((resolve2) => setTimeout(resolve2, 50));
+    await new Promise((resolve3) => setTimeout(resolve3, 50));
   }
   return null;
 }

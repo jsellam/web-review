@@ -61,9 +61,9 @@ export function relocate(anchor: Anchor, lines: string[]): Relocation {
 
 /**
  * The candidate closest to `target`, if any lies within `window` lines of it.
- * On a tie, the later candidate wins (`<=`, not `<`): when the anchored line
- * shifted, the earlier occurrence with the same content is the more likely
- * decoy — the recorded neighbours keep marching along with the real match.
+ * On a tie, the later candidate wins (`<=`, not `<`) — arbitrarily. Distance
+ * alone cannot tell two equidistant candidates apart, and no distance-only
+ * rule is more "correct" than another; this just needs to pick one consistently.
  */
 function nearest(candidates: number[], target: number, window: number): number | null {
   let best: number | null = null;

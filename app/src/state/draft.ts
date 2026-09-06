@@ -18,7 +18,7 @@ export interface DraftState {
   setComment(file: string, side: Side, line: number, body: string): void;
   removeComment(key: string): void;
   setReply(threadId: string, body: string): void;
-  setResolved(threadId: string, value: boolean): void;
+  setResolved(threadId: string, value: boolean, original?: boolean): void;
   setGeneral(body: string): void;
   setViewed(file: string, value: boolean): void;
   reset(): void;
@@ -65,8 +65,17 @@ export const useDraftStore = create<DraftState>((set) => ({
     );
   },
 
-  setResolved(threadId, value) {
-    set((state) => ({ resolved: { ...state.resolved, [threadId]: value } }));
+  setResolved(threadId, value, original) {
+    // When the caller tells us what the thread's status was before any
+    // staging (CommentThread does), a toggle that lands back on that value
+    // is not a pending change at all — clear the key rather than leave a
+    // `{ [id]: original }` entry that still inflates pendingCount and still
+    // gets sent as a resolve/reopen on submit.
+    set((state) =>
+      original !== undefined && value === original
+        ? { resolved: withoutKey(state.resolved, threadId) }
+        : { resolved: { ...state.resolved, [threadId]: value } },
+    );
   },
 
   setGeneral(general) {

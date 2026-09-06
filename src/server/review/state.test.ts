@@ -86,16 +86,20 @@ describe('readState / writeState', () => {
     expect(await readState(dir)).toEqual(emptyState());
   });
 
-  it('falls back to an empty state when the file contains malformed JSON', async () => {
+  it('rejects malformed JSON instead of silently discarding every round of state', async () => {
     await writeFile(join(dir, 'state.json'), '{not valid json', 'utf8');
 
-    expect(await readState(dir)).toEqual(emptyState());
+    // Returning an empty state here would look like a normal read to the
+    // caller, and the next writeState would then persist that empty state,
+    // permanently destroying every thread ever recorded. A corrupt file must
+    // surface as an error instead.
+    await expect(readState(dir)).rejects.toThrow(/state\.json/i);
   });
 
-  it('falls back to an empty state when the version does not match', async () => {
+  it('rejects an unexpected version instead of silently discarding every round of state', async () => {
     await writeFile(join(dir, 'state.json'), JSON.stringify({ version: 2, round: 5, threads: [] }), 'utf8');
 
-    expect(await readState(dir)).toEqual(emptyState());
+    await expect(readState(dir)).rejects.toThrow(/state\.json/i);
   });
 
   it('rethrows a non-ENOENT read error instead of masking it as empty state', async () => {
@@ -213,7 +217,7 @@ describe('openRound', () => {
       lookup,
       now,
     );
-    const resolved = await applySubmission(first, submission({ resolved: ['t1'] }), lookup, now);
+    const { state: resolved } = await applySubmission(first, submission({ resolved: ['t1'] }), lookup, now);
 
     const second = await openRound(resolved, request(), lookup, now);
 
@@ -227,7 +231,7 @@ describe('openRound', () => {
       lookup,
       now,
     );
-    const resolved = await applySubmission(first, submission({ resolved: ['t1'] }), lookup, now);
+    const { state: resolved } = await applySubmission(first, submission({ resolved: ['t1'] }), lookup, now);
     expect(resolved.threads[0]?.status).toBe('resolved');
 
     const fileMissing = await openRound(resolved, request(), lookupOf({}), now);
@@ -271,7 +275,7 @@ describe('applySubmission', () => {
   it('anchors a new comment against the current file contents', async () => {
     const state = await openRound(emptyState(), request(), lookup, now);
 
-    const next = await applySubmission(
+    const { state: next, unanchored } = await applySubmission(
       state,
       submission({
         newComments: [{ file: 'a.ts', side: 'new', line: 3, body: 'rename this' }],
@@ -290,6 +294,7 @@ describe('applySubmission', () => {
         messages: [{ author: 'user', round: 1, body: 'rename this', at: AT }],
       },
     ]);
+    expect(unanchored).toEqual([]);
   });
 
   it('appends a human reply to an existing thread', async () => {
@@ -300,7 +305,7 @@ describe('applySubmission', () => {
       now,
     );
 
-    const next = await applySubmission(
+    const { state: next } = await applySubmission(
       state,
       submission({ replies: [{ threadId: 't1', body: 'no, keep it' }] }),
       lookup,
@@ -323,17 +328,17 @@ describe('applySubmission', () => {
       now,
     );
 
-    const resolved = await applySubmission(state, submission({ resolved: ['t1'] }), lookup, now);
+    const { state: resolved } = await applySubmission(state, submission({ resolved: ['t1'] }), lookup, now);
     expect(resolved.threads[0]?.status).toBe('resolved');
 
-    const reopened = await applySubmission(resolved, submission({ reopened: ['t1'] }), lookup, now);
+    const { state: reopened } = await applySubmission(resolved, submission({ reopened: ['t1'] }), lookup, now);
     expect(reopened.threads[0]?.status).toBe('open');
   });
 
-  it('ignores a new comment on a line that no longer exists', async () => {
+  it('reports, rather than silently drops, a new comment on a line that no longer exists', async () => {
     const state = await openRound(emptyState(), request(), lookup, now);
 
-    const next = await applySubmission(
+    const { state: next, unanchored } = await applySubmission(
       state,
       submission({ newComments: [{ file: 'a.ts', side: 'new', line: 99, body: 'x' }] }),
       lookup,
@@ -341,12 +346,27 @@ describe('applySubmission', () => {
     );
 
     expect(next.threads).toEqual([]);
+    expect(unanchored).toEqual([{ file: 'a.ts', side: 'new', line: 99, body: 'x' }]);
+  });
+
+  it('reports a new comment on a file the lookup cannot find at all', async () => {
+    const state = await openRound(emptyState(), request(), lookup, now);
+
+    const { state: next, unanchored } = await applySubmission(
+      state,
+      submission({ newComments: [{ file: 'gone.ts', side: 'new', line: 1, body: 'x' }] }),
+      lookup,
+      now,
+    );
+
+    expect(next.threads).toEqual([]);
+    expect(unanchored).toEqual([{ file: 'gone.ts', side: 'new', line: 1, body: 'x' }]);
   });
 
   it('gives every new thread a distinct id', async () => {
     const state = await openRound(emptyState(), request(), lookup, now);
 
-    const next = await applySubmission(
+    const { state: next } = await applySubmission(
       state,
       submission({
         newComments: [
@@ -369,7 +389,7 @@ describe('applySubmission', () => {
       now,
     );
 
-    const next = await applySubmission(
+    const { state: next } = await applySubmission(
       state,
       submission({
         replies: [{ threadId: 'nope', body: 'x' }],

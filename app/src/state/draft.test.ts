@@ -43,6 +43,25 @@ describe('the draft store', () => {
     expect(state.resolved).toEqual({ t2: true, t3: false });
   });
 
+  it('clears a resolve toggle that is switched back to the thread\'s original state', () => {
+    // t2 started open (original: false). Staging "resolve" then "un-resolve"
+    // must leave no trace — not a `{ t2: false }` entry that still counts
+    // toward the pending badge and still gets sent as a reopen.
+    useDraftStore.getState().setResolved('t2', true, false);
+    expect(useDraftStore.getState().resolved).toEqual({ t2: true });
+
+    useDraftStore.getState().setResolved('t2', false, false);
+    expect(useDraftStore.getState().resolved).toEqual({});
+  });
+
+  it('keeps a resolve toggle that lands on the opposite of the original state', () => {
+    useDraftStore.getState().setResolved('t2', true, false);
+    useDraftStore.getState().setResolved('t2', false, false);
+    useDraftStore.getState().setResolved('t2', true, false);
+
+    expect(useDraftStore.getState().resolved).toEqual({ t2: true });
+  });
+
   it('remembers which files have been marked viewed', () => {
     useDraftStore.getState().setViewed('src/a.ts', true);
 
@@ -57,6 +76,14 @@ describe('pendingCount', () => {
     useDraftStore.getState().setResolved('t2', true);
 
     expect(pendingCount(useDraftStore.getState())).toBe(3);
+  });
+
+  it('drops back to zero once a resolve-only toggle is undone', () => {
+    useDraftStore.getState().setResolved('t2', true, false);
+    expect(pendingCount(useDraftStore.getState())).toBe(1);
+
+    useDraftStore.getState().setResolved('t2', false, false);
+    expect(pendingCount(useDraftStore.getState())).toBe(0);
   });
 
   it('ignores the general comment and viewed flags', () => {

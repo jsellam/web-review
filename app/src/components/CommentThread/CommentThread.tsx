@@ -73,7 +73,10 @@ export function CommentThread({ thread }: Props) {
             <Button size="small" onClick={() => setReplying(true)}>
               Reply
             </Button>
-            <Button size="small" onClick={() => setResolved(thread.id, !resolved)}>
+            <Button
+              size="small"
+              onClick={() => setResolved(thread.id, !resolved, thread.status === 'resolved')}
+            >
               {resolved ? 'Reopen' : 'Resolve'}
             </Button>
           </Space>

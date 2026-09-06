@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { handleApi, SubmissionConflictError, type RouteDeps } from './routes.js';
 import { serveStatic } from './static.js';
-import type { SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
+import type { NewComment, SessionPayload, Side, SubmitPayload } from '../../shared/types.js';
 
 export const SERVER_FILE = 'server.json';
 
@@ -28,8 +28,19 @@ export interface StartOptions {
   token: string;
   getSession(): Promise<SessionPayload>;
   getFile(path: string, side: Side): Promise<string | null>;
-  /** Called once, with the first accepted submission. */
-  onSubmit(payload: SubmitPayload): Promise<void>;
+  /**
+   * Called once, with the first accepted submission. Must call
+   * `markPersisted()` as soon as the submission has been durably folded into
+   * state.json — before that point a failure is safely retryable from
+   * scratch, but after it a retry would re-apply the submission on top of
+   * the already-updated state and duplicate every new thread and reply, so
+   * the guard below refuses every further call once it has fired, even if
+   * this function goes on to fail afterwards (e.g. writing result.json).
+   */
+  onSubmit(
+    payload: SubmitPayload,
+    markPersisted: () => void,
+  ): Promise<{ unanchored: NewComment[] }>;
 }
 
 export interface ServerHandle {
@@ -74,7 +85,6 @@ export async function startServer(options: StartOptions): Promise<ServerHandle> 
           port,
           getSession: options.getSession,
           getFile: options.getFile,
-          waitForSubmission,
           // This server is the single writer for its repository for the lifetime
           // of one review: server.json plus isServerAlive's liveness check are
           // what prevent a second server process from starting concurrently
@@ -90,17 +100,27 @@ export async function startServer(options: StartOptions): Promise<ServerHandle> 
             // Checked and set synchronously, with no `await` in between, so
             // this also wins the race between two concurrent POSTs.
             submitting = true;
+            // Set by onSubmit's markPersisted callback the moment the
+            // submission is durably folded into state.json. A failure before
+            // that point (nothing changed yet) is safely retryable; a
+            // failure after it is not, because a retry would re-apply the
+            // submission on top of the already-updated state — so the catch
+            // below only resets `submitting` when persistence never happened.
+            let persisted = false;
+            let result: { unanchored: NewComment[] };
             try {
-              await options.onSubmit(payload);
+              result = await options.onSubmit(payload, () => {
+                persisted = true;
+                submitted = true;
+              });
             } catch (error) {
-              // A submission that genuinely failed to persist must remain
-              // retryable, so only a successful submit latches `submitted`.
-              submitting = false;
+              if (!persisted) submitting = false;
               throw error;
             }
             submitting = false;
             submitted = true;
             for (const waiter of [...waiters]) waiter(true);
+            return result;
           },
         };
 
@@ -190,8 +210,13 @@ export async function isServerAlive(record: ServerRecord): Promise<boolean> {
 
   // Node's fetch always sets Host from the request URL's own authority and
   // silently ignores an explicit override, so there is no point passing one.
+  // A timeout matters here: fetch has none by default, so a server that is
+  // alive but wedged (pid present, port unresponsive) would hang this check
+  // forever — and the re-attach path in cli.ts awaits it before printing
+  // anything, so a hang here is silence to the agent, worse than `pending`.
   const response = await fetch(`http://127.0.0.1:${record.port}/api/session`, {
     headers: { 'x-review-token': record.token },
+    signal: AbortSignal.timeout(5000),
   }).catch(() => null);
 
   return response?.ok === true;

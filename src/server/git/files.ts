@@ -1,5 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 import { git, gitRaw, gitOk, type GitOptions } from './exec.js';
 import type { DiffRange } from './range.js';
 import type { FileEntry, FileStatus, Side } from '../../shared/types.js';
@@ -157,6 +157,21 @@ function countLines(content: string): number {
   return content.endsWith('\n') ? lines.length - 1 : lines.length;
 }
 
+/**
+ * Maps a renamed file's current (new) path to its pre-rename (old) path.
+ * `Thread.file` always stores the new path, on both sides (see
+ * `applySubmission`/`openRound`), so an old-side lookup for a renamed file
+ * must translate through this map before it can find the file at `base` —
+ * the file never existed at the new path there.
+ */
+export function renameMap(files: FileEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const file of files) {
+    if (file.status === 'renamed' && file.oldPath) map.set(file.path, file.oldPath);
+  }
+  return map;
+}
+
 export async function readSide(
   path: string,
   side: Side,
@@ -187,8 +202,29 @@ export async function readSide(
     return gitRaw(['show', `:${path}`], opts);
   }
 
-  const full = join(opts.cwd, path);
+  // This is the one branch that reads the raw filesystem with a path that
+  // ultimately comes from an HTTP query parameter (GET /api/file), so a
+  // `path` containing `..` must never be allowed to escape the repository —
+  // unlike the git-object branches above, which can only ever resolve to
+  // paths git itself tracked.
+  const root = resolve(opts.cwd);
+  const full = resolve(root, path);
+  if (full !== root && !full.startsWith(root + sep)) return null;
+
   const info = await stat(full).catch(() => null);
   if (!info?.isFile()) return null;
+
+  // Defence in depth against a tracked-looking path that is actually a
+  // symlink escaping the repository: the check above only catches `..`
+  // segments in the requested path itself. Resolve the root through symlinks
+  // too (not just `full`) — on macOS the temp directory itself is a symlink
+  // (`/var` -> `/private/var`), so comparing an unresolved root against a
+  // resolved path would reject every request.
+  const [realRoot, real] = await Promise.all([
+    realpath(root).catch(() => root),
+    realpath(full).catch(() => null),
+  ]);
+  if (real === null || (real !== realRoot && !real.startsWith(realRoot + sep))) return null;
+
   return readFile(full, 'utf8');
 }

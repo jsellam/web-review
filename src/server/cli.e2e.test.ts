@@ -64,6 +64,42 @@ describe('the CLI', () => {
     expect(await cli(['--no-open'])).toEqual({ status: 'no_changes' });
   });
 
+  it('leaves request.json in place on a no_changes exit, so the agent can retry', async () => {
+    const stateDir = join(repo.dir, '.git', 'web-review');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, 'request.json'),
+      JSON.stringify({ summary: 'a summary the agent must not lose' }),
+      'utf8',
+    );
+
+    expect(await cli(['--no-open'])).toEqual({ status: 'no_changes' });
+
+    const survived = JSON.parse(await readFile(join(stateDir, 'request.json'), 'utf8')) as {
+      summary: string;
+    };
+    expect(survived.summary).toBe('a summary the agent must not lose');
+  });
+
+  it('leaves request.json in place when the base ref cannot be resolved', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+    const stateDir = join(repo.dir, '.git', 'web-review');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      join(stateDir, 'request.json'),
+      JSON.stringify({ summary: 'keep me', base: 'nosuchref' }),
+      'utf8',
+    );
+
+    const result = await cli(['--no-open']);
+    expect(result.status).toBe('error');
+
+    const survived = JSON.parse(await readFile(join(stateDir, 'request.json'), 'utf8')) as {
+      summary: string;
+    };
+    expect(survived.summary).toBe('keep me');
+  });
+
   it('errors outside a git repository', async () => {
     const { stdout } = await run(process.execPath, [CLI], { cwd: '/tmp' })
       .catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }));
@@ -78,6 +114,20 @@ describe('the CLI', () => {
 
     expect(result.status).toBe('pending');
     expect(result.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32}$/);
+  }, 20_000);
+
+  it('prints the URL to stderr under --no-open, per README, instead of staying silent', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const { stdout, stderr } = await run(process.execPath, [CLI, '--no-open', '--timeout', '2'], {
+      cwd: repo.dir,
+    });
+
+    const result = parseFramed(stdout);
+    expect(result.status).toBe('pending');
+    // Printed to stderr, never stdout, so it can never be mistaken for part
+    // of the framed JSON contract an agent parses from stdout.
+    expect(stderr.trim()).toBe(result.url);
   }, 20_000);
 
   it('carries the agent summary and annotations into the session', async () => {
@@ -144,6 +194,80 @@ describe('the CLI', () => {
       author: 'user',
       body: 'return a token',
     });
+  }, 30_000);
+
+  it('keeps an old-side comment on a renamed file instead of dropping it', async () => {
+    // The old-side content lives at the pre-rename path in the base commit —
+    // `src/auth.ts` never existed at `src/renamed-auth.ts` there. A comment
+    // on the old side must still resolve through the rename, not vanish.
+    await repo.run('mv', 'src/auth.ts', 'src/renamed-auth.ts');
+    await repo.commit('rename auth.ts');
+    await repo.write('src/renamed-auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const pending = await cli(['--no-open', '--timeout', '2', '--base', 'HEAD~1']);
+    const url = new URL(pending.url!);
+    const token = url.searchParams.get('t')!;
+
+    const posted = await fetch(`${url.origin}/api/review`, {
+      method: 'POST',
+      headers: { 'x-review-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        verdict: 'comment',
+        general: '',
+        newComments: [
+          { file: 'src/renamed-auth.ts', side: 'old', line: 1, body: 'why did this return 1?' },
+        ],
+      }),
+    });
+    expect(posted.status).toBe(200);
+    expect(((await posted.json()) as { unanchored: unknown[] }).unanchored).toEqual([]);
+
+    const submitted = await cli(['--no-open', '--timeout', '10']);
+
+    expect(submitted.status).toBe('submitted');
+    expect(submitted.threads).toHaveLength(1);
+    expect(submitted.threads![0]).toMatchObject({
+      file: 'src/renamed-auth.ts',
+      side: 'old',
+      status: 'open',
+      anchor: { line: 1, content: 'export function sign() {' },
+    });
+    expect(submitted.threads![0]!.messages[0]).toMatchObject({
+      author: 'user',
+      body: 'why did this return 1?',
+    });
+  }, 30_000);
+
+  it('reports a new comment that cannot be anchored instead of dropping it silently', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const pending = await cli(['--no-open', '--timeout', '2']);
+    const url = new URL(pending.url!);
+    const token = url.searchParams.get('t')!;
+
+    const posted = await fetch(`${url.origin}/api/review`, {
+      method: 'POST',
+      headers: { 'x-review-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        verdict: 'comment',
+        general: '',
+        // Line 99 does not exist on either side: this can never be anchored.
+        newComments: [{ file: 'src/auth.ts', side: 'new', line: 99, body: 'orphaned comment' }],
+      }),
+    });
+    expect(posted.status).toBe(200);
+    const body = (await posted.json()) as { unanchored: { file: string; body: string }[] };
+    expect(body.unanchored).toEqual([
+      { file: 'src/auth.ts', side: 'new', line: 99, body: 'orphaned comment' },
+    ]);
+
+    const submitted = await cli(['--no-open', '--timeout', '10']);
+
+    expect(submitted.status).toBe('submitted');
+    expect(submitted.threads).toEqual([]);
+    expect(submitted.unanchored).toEqual([
+      { file: 'src/auth.ts', side: 'new', line: 99, body: 'orphaned comment' },
+    ]);
   }, 30_000);
 
   it('delivers a review submitted after the CLI already returned pending and exited', async () => {

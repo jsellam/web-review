@@ -1,13 +1,19 @@
-import type { CliResult, ReviewState, Verdict } from '../../shared/types.js';
+import type { CliResult, NewComment, ReviewState, Verdict } from '../../shared/types.js';
 
 /**
  * Every thread is returned, including resolved and outdated ones: the agent
  * needs the whole conversation, not just what is actionable this round.
+ *
+ * `unanchored` carries any new comments from this submission that could not
+ * be placed on a line (see `applySubmission`) — surfaced here rather than
+ * silently dropped, so the agent knows a piece of feedback never made it in.
+ * Omitted entirely when empty, so the common case stays exactly as before.
  */
 export function submittedResult(
   state: ReviewState,
   verdict: Verdict,
   general: string,
+  unanchored: NewComment[] = [],
 ): CliResult {
   return {
     status: 'submitted',
@@ -15,6 +21,7 @@ export function submittedResult(
     round: state.round,
     general,
     threads: state.threads,
+    ...(unanchored.length > 0 ? { unanchored } : {}),
   };
 }
 

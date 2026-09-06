@@ -21,7 +21,7 @@ import { DiffPane, type ViewMode } from './components/DiffPane/index.js';
 import { SubmitDrawer } from './components/SubmitDrawer/SubmitDrawer.js';
 import { pendingCount, useDraftStore } from './state/draft.js';
 import type { ReviewApi } from './api/client.js';
-import type { SessionPayload } from '../../src/shared/types.js';
+import type { NewComment, SessionPayload } from '../../src/shared/types.js';
 
 interface Props {
   api: ReviewApi;
@@ -34,6 +34,7 @@ export function App({ api }: Props) {
   const [mode, setMode] = useState<ViewMode>('split');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [done, setDone] = useState(false);
+  const [unanchored, setUnanchored] = useState<NewComment[]>([]);
   const viewed = useDraftStore((state) => state.viewed);
   const setViewed = useDraftStore((state) => state.setViewed);
   const pending = useDraftStore(pendingCount);
@@ -50,6 +51,34 @@ export function App({ api }: Props) {
           title="Review submitted"
           subTitle="The agent has your feedback. You can close this tab."
         />
+        {unanchored.length > 0 ? (
+          <div style={{ maxWidth: 480, margin: '0 auto' }}>
+            <Alert
+              type="warning"
+              showIcon
+              message={`${unanchored.length} comment${unanchored.length === 1 ? '' : 's'} could not be placed`}
+              description={
+                <>
+                  <Typography.Paragraph>
+                    The file changed in a way that made the line these comments were on
+                    unrecognisable, so they were not attached to the review. The agent still
+                    receives them.
+                  </Typography.Paragraph>
+                  <ul>
+                    {unanchored.map((comment, index) => (
+                      <li key={index}>
+                        <Typography.Text code>
+                          {comment.file}:{comment.line} ({comment.side})
+                        </Typography.Text>{' '}
+                        {comment.body}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              }
+            />
+          </div>
+        ) : null}
       </ConfigProvider>
     );
   }
@@ -134,7 +163,8 @@ export function App({ api }: Props) {
         api={api}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        onSubmitted={() => {
+        onSubmitted={(droppedComments) => {
+          setUnanchored(droppedComments);
           setDrawerOpen(false);
           setDone(true);
         }}

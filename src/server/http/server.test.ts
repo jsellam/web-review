@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { request as httpRequest } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isServerAlive, readServerRecord, startServer, type ServerHandle } from './server.js';
 import { makeToken } from './security.js';
@@ -63,8 +63,10 @@ beforeEach(async () => {
     token,
     getSession: async () => session,
     getFile: async (path) => (path === 'a.ts' ? 'one\ntwo\n' : null),
-    onSubmit: async (payload) => {
+    onSubmit: async (payload, markPersisted) => {
       received.push(payload);
+      markPersisted();
+      return { unanchored: [] };
     },
   });
 });
@@ -72,6 +74,30 @@ beforeEach(async () => {
 afterEach(async () => {
   await handle.close();
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('isServerAlive', () => {
+  it('gives up instead of hanging forever against a pid that is alive but a port that never answers', async () => {
+    // A handler that never calls res.end leaves the connection open with no
+    // response — exactly a wedged server. Without a request timeout, fetch
+    // would hang on this indefinitely.
+    const wedged = createServer(() => {});
+    await new Promise<void>((resolve) => wedged.listen(0, '127.0.0.1', resolve));
+    const address = wedged.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+
+    try {
+      const alive = await isServerAlive({
+        pid: process.pid,
+        port,
+        token: 'x',
+        startedAt: new Date().toISOString(),
+      });
+      expect(alive).toBe(false);
+    } finally {
+      wedged.close();
+    }
+  }, 8000);
 });
 
 describe('startServer', () => {
@@ -121,6 +147,21 @@ describe('startServer', () => {
     const response = await fetch(`http://127.0.0.1:${handle.port}/anything`);
 
     expect(await response.text()).toBe('<html>app</html>');
+  });
+
+  it('no longer exposes /api/wait — nothing ever consumed it', async () => {
+    expect((await call('/api/wait')).status).toBe(404);
+  });
+
+  it('passes onSubmit\'s unanchored list through to the response body', async () => {
+    const response = await call('/api/review', {
+      method: 'POST',
+      body: JSON.stringify({ verdict: 'comment' }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean; unanchored: unknown[] };
+    expect(body).toEqual({ ok: true, unanchored: [] });
   });
 });
 
@@ -176,7 +217,7 @@ describe('POST /api/review double-submission guard', () => {
     expect(received).toHaveLength(1);
   });
 
-  it('lets a submission be retried after onSubmit rejects, without locking the user out', async () => {
+  it('lets a submission be retried after onSubmit rejects before persisting anything', async () => {
     let calls = 0;
     const retryDir = await mkdtemp(join(tmpdir(), 'web-review-server-retry-'));
     await writeFile(join(retryDir, 'index.html'), '<html>app</html>', 'utf8');
@@ -193,6 +234,7 @@ describe('POST /api/review double-submission guard', () => {
         calls += 1;
         if (calls === 1) throw new Error('disk full');
         retryReceived.push(payload);
+        return { unanchored: [] };
       },
     });
 
@@ -215,6 +257,61 @@ describe('POST /api/review double-submission guard', () => {
       expect(first.status).toBe(500);
       expect(second.status).toBe(200);
       expect(calls).toBe(2);
+      expect(retryReceived).toHaveLength(1);
+    } finally {
+      await retryHandle.close();
+      await rm(retryDir, { recursive: true, force: true });
+    }
+  });
+
+  it('never lets a retry re-apply a submission that already reached durable state', async () => {
+    // Models the real failure this guards against: cli.ts's onSubmit writes
+    // state.json, THEN writes result.json — a real onSubmit calls
+    // markPersisted() right after the first write succeeds. If the second
+    // write then fails and a naive guard reset `submitting`, a browser retry
+    // would call onSubmit again and re-apply the submission on top of the
+    // already-updated state, duplicating every new thread and reply. Once
+    // markPersisted() has fired, the guard must refuse every further call —
+    // the failure that follows is real, but retrying is not the fix for it.
+    let calls = 0;
+    const retryDir = await mkdtemp(join(tmpdir(), 'web-review-server-retry-'));
+    await writeFile(join(retryDir, 'index.html'), '<html>app</html>', 'utf8');
+    const retryReceived: SubmitPayload[] = [];
+
+    const retryHandle = await startServer({
+      staticRoot: retryDir,
+      stateDir: retryDir,
+      port: 0,
+      token,
+      getSession: async () => session,
+      getFile: async () => null,
+      onSubmit: async (payload, markPersisted) => {
+        calls += 1;
+        retryReceived.push(payload); // the durable write succeeded...
+        markPersisted();
+        throw new Error('disk full writing result.json'); // ...but this did not.
+      },
+    });
+
+    try {
+      const retryCall = (path: string, init: RequestInit = {}) =>
+        fetch(`http://127.0.0.1:${retryHandle.port}${path}`, {
+          ...init,
+          headers: { 'x-review-token': token, ...(init.headers ?? {}) },
+        });
+
+      const first = await retryCall('/api/review', {
+        method: 'POST',
+        body: JSON.stringify({ verdict: 'approve' }),
+      });
+      const second = await retryCall('/api/review', {
+        method: 'POST',
+        body: JSON.stringify({ verdict: 'approve' }),
+      });
+
+      expect(first.status).toBe(500);
+      expect(second.status).toBe(409);
+      expect(calls).toBe(1);
       expect(retryReceived).toHaveLength(1);
     } finally {
       await retryHandle.close();

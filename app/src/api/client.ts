@@ -1,4 +1,4 @@
-import type { SessionPayload, Side, SubmitPayload } from '../../../src/shared/types.js';
+import type { NewComment, SessionPayload, Side, SubmitPayload } from '../../../src/shared/types.js';
 
 export class ApiError extends Error {
   constructor(
@@ -17,10 +17,15 @@ export function readToken(search: string): string {
   return token;
 }
 
+export interface SubmitResult {
+  /** Comments from this submission that could not be anchored to a line and were dropped. */
+  unanchored: NewComment[];
+}
+
 export interface ReviewApi {
   getSession(): Promise<SessionPayload>;
   getFile(path: string, side: Side): Promise<string | null>;
-  submit(payload: SubmitPayload): Promise<void>;
+  submit(payload: SubmitPayload): Promise<SubmitResult>;
 }
 
 async function unwrap(response: Response): Promise<unknown> {
@@ -47,13 +52,14 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch): Revie
     },
 
     async submit(payload) {
-      await unwrap(
+      const body = (await unwrap(
         await fetchImpl('/api/review', {
           method: 'POST',
           headers: { ...headers, 'content-type': 'application/json' },
           body: JSON.stringify(payload),
         }),
-      );
+      )) as { unanchored?: NewComment[] } | null;
+      return { unanchored: body?.unanchored ?? [] };
     },
   };
 }
