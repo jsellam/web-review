@@ -1,0 +1,152 @@
+import { mkdtemp, rm, writeFile, access, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { consumeRequest, readRequest, RequestError, validateRequest, validateSubmit } from './request.js';
+
+let dir: string;
+
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'web-review-req-'));
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+describe('validateRequest', () => {
+  it('fills every field from a complete request', () => {
+    expect(
+      validateRequest({
+        summary: 'Add JWT refresh.',
+        base: 'HEAD',
+        annotations: [{ file: 'a.ts', line: 3, side: 'new', body: 'hard-coded' }],
+        replies: [{ threadId: 't1', body: 'done' }],
+      }),
+    ).toEqual({
+      summary: 'Add JWT refresh.',
+      base: 'HEAD',
+      annotations: [{ file: 'a.ts', line: 3, side: 'new', body: 'hard-coded' }],
+      replies: [{ threadId: 't1', body: 'done' }],
+    });
+  });
+
+  it('applies defaults for every omitted field', () => {
+    expect(validateRequest({})).toEqual({
+      summary: '',
+      base: 'auto',
+      annotations: [],
+      replies: [],
+    });
+  });
+
+  it('rejects a non-object payload', () => {
+    expect(() => validateRequest([])).toThrow(RequestError);
+    expect(() => validateRequest(null)).toThrow(/must be a JSON object/i);
+  });
+
+  it('names the offending field on a bad annotation', () => {
+    expect(() =>
+      validateRequest({ annotations: [{ file: 'a.ts', line: 0, side: 'new', body: 'x' }] }),
+    ).toThrow(/annotations\[0\]\.line/);
+  });
+
+  it('rejects an unknown side', () => {
+    expect(() =>
+      validateRequest({ annotations: [{ file: 'a.ts', line: 1, side: 'both', body: 'x' }] }),
+    ).toThrow(/annotations\[0\]\.side/);
+  });
+
+  it('rejects a reply without a thread id', () => {
+    expect(() => validateRequest({ replies: [{ body: 'done' }] }))
+      .toThrow(/replies\[0\]\.threadId/);
+  });
+});
+
+describe('readRequest', () => {
+  it('returns defaults when the file is absent', async () => {
+    expect(await readRequest(dir)).toEqual({
+      summary: '',
+      base: 'auto',
+      annotations: [],
+      replies: [],
+    });
+  });
+
+  it('throws a readable error on malformed JSON', async () => {
+    await writeFile(join(dir, 'request.json'), '{ not json', 'utf8');
+
+    await expect(readRequest(dir)).rejects.toThrow(/request\.json is not valid JSON/i);
+  });
+
+  it('rethrows non-ENOENT read errors', async () => {
+    await mkdir(join(dir, 'request.json'));
+
+    await expect(readRequest(dir)).rejects.toThrow();
+  });
+
+  it('returns fresh default objects on each file-absent call', async () => {
+    const first = await readRequest(dir);
+    const second = await readRequest(dir);
+
+    expect(first.annotations).not.toBe(second.annotations);
+    expect(first.replies).not.toBe(second.replies);
+  });
+});
+
+describe('consumeRequest', () => {
+  it('reads the request and deletes the file', async () => {
+    await writeFile(join(dir, 'request.json'), JSON.stringify({ summary: 'hi' }), 'utf8');
+
+    expect((await consumeRequest(dir)).summary).toBe('hi');
+    await expect(access(join(dir, 'request.json'))).rejects.toThrow();
+  });
+
+  it('rejects on malformed JSON and leaves the file in place', async () => {
+    await writeFile(join(dir, 'request.json'), '{ not json', 'utf8');
+
+    await expect(consumeRequest(dir)).rejects.toThrow(/request\.json is not valid JSON/i);
+    await expect(access(join(dir, 'request.json'))).resolves.toBeUndefined();
+  });
+});
+
+describe('validateSubmit', () => {
+  it('accepts a complete submission', () => {
+    const payload = {
+      verdict: 'request_changes',
+      general: 'two things',
+      newComments: [{ file: 'a.ts', side: 'new', line: 4, body: 'rename' }],
+      replies: [{ threadId: 't1', body: 'ok' }],
+      resolved: ['t2'],
+      reopened: ['t3'],
+    };
+
+    expect(validateSubmit(payload)).toEqual(payload);
+  });
+
+  it('defaults every list and the general comment', () => {
+    expect(validateSubmit({ verdict: 'approve' })).toEqual({
+      verdict: 'approve',
+      general: '',
+      newComments: [],
+      replies: [],
+      resolved: [],
+      reopened: [],
+    });
+  });
+
+  it('rejects an unknown verdict', () => {
+    expect(() => validateSubmit({ verdict: 'lgtm' })).toThrow(/verdict/);
+  });
+
+  it('names the offending field on a bad comment', () => {
+    expect(() =>
+      validateSubmit({ verdict: 'comment', newComments: [{ file: 'a.ts', side: 'new', line: -1, body: 'x' }] }),
+    ).toThrow(/newComments\[0\]\.line/);
+  });
+
+  it('rejects a non-string thread id in resolved', () => {
+    expect(() => validateSubmit({ verdict: 'comment', resolved: [7] }))
+      .toThrow(/resolved\[0\]/);
+  });
+});

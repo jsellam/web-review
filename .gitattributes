@@ -1,0 +1,2 @@
+dist/** -diff linguist-generated
+app/dist/** -diff linguist-generated
