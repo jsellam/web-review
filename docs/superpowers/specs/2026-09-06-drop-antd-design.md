@@ -119,7 +119,7 @@ design systems side by side.
 
 Verified against the shipped stylesheet:
 
-- It exposes **19 `--diff-*` custom properties** — content and highlight fills
+- It exposes **20 `--diff-*` custom properties** — content and highlight fills
   for add/del, line-number gutters, borders, hunk headers, expand rows, widget
   colours.
 - They are scoped as
@@ -132,7 +132,7 @@ Verified against the shipped stylesheet:
 
 ### 7.1 Variable mapping
 
-`app/src/styles/diff-theme.css` maps the library's 19 variables onto our tokens:
+`app/src/styles/diff-theme.css` maps the library's 20 variables onto our tokens:
 
 ```css
 html .diff-tailwindcss-wrapper[data-theme="dark"] .diff-style-root {
@@ -305,7 +305,7 @@ until the last one so intermediate states compile.
 
 ## 11. Risks
 
-**The one design risk is step 2.** If the 19 variables plus the `.hljs-*`
+**The one design risk is step 2.** If the 20 variables plus the `.hljs-*`
 overrides do not produce a coherent diff, stop and revisit before committing to
 steps 3–5. Everything after step 2 is mechanical.
 
