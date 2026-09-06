@@ -1007,6 +1007,12 @@ async function main() {
     return;
   }
   await removeServerRecord(stateDir);
+  const unconsumed = await readFile6(join6(stateDir, RESULT_FILE), "utf8").catch(() => null);
+  if (unconsumed !== null) {
+    await rm3(join6(stateDir, RESULT_FILE), { force: true });
+    emit(JSON.parse(unconsumed));
+    return;
+  }
   const request = await consumeRequest(stateDir);
   const range = await resolveRange(options.base === "auto" ? request.base : options.base, { cwd: root });
   const files = await listChangedFiles(range, { cwd: root });

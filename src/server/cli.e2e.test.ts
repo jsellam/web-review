@@ -7,6 +7,31 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createRepo, type TestRepo } from './test-helpers/repo.js';
 import { parseFramed } from '../shared/protocol.js';
 import type { CliResult, SessionPayload } from '../shared/types.js';
+import { readServerRecord } from './http/server.js';
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Polls until the given pid has actually exited, rather than sleeping a
+ * fixed guess-and-hope duration. Bounded so a hung process cannot hang the
+ * test suite.
+ */
+async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (isPidAlive(pid)) {
+    if (Date.now() > deadline) {
+      throw new Error(`pid ${pid} did not exit within ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 const run = promisify(execFile);
 const CLI = resolve('dist/web-review.mjs');
@@ -119,6 +144,38 @@ describe('the CLI', () => {
       author: 'user',
       body: 'return a token',
     });
+  }, 30_000);
+
+  it('delivers a review submitted after the CLI already returned pending and exited', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+    const stateDir = join(repo.dir, '.git', 'web-review');
+
+    const pending = await cli(['--no-open', '--timeout', '2']);
+    const url = new URL(pending.url!);
+    const token = url.searchParams.get('t')!;
+
+    const record = await readServerRecord(stateDir);
+    expect(record).not.toBeNull();
+
+    const posted = await fetch(`${url.origin}/api/review`, {
+      method: 'POST',
+      headers: { 'x-review-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ verdict: 'approve', general: '', newComments: [] }),
+    });
+    expect(posted.status).toBe(200);
+
+    // The server writes result.json and then exits about 250ms later, with
+    // no process left waiting on the submission by the time it does. Wait
+    // for the actual exit rather than a fixed sleep, so this reproduces the
+    // real race instead of hoping to land inside or outside the window.
+    await waitForExit(record!.pid, 10_000);
+
+    // The agent, following SKILL.md, re-runs the CLI exactly as instructed
+    // after a `pending` result. The submitted review must not be discarded.
+    const result = await cli(['--no-open', '--timeout', '2']);
+
+    expect(result.status).toBe('submitted');
+    expect(result.verdict).toBe('approve');
   }, 30_000);
 
   it('carries a thread into round 2 and follows the line when it moves', async () => {

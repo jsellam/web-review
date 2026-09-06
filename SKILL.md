@@ -38,10 +38,9 @@ Run a human code review of your own changes and act on the result.
   the same repository. It is not a result: do not treat it as approval and do
   not start editing. The review server keeps running in the background even
   after this command exits, so re-running reattaches to it instead of
-  starting over. Do this promptly — if you wait a long time after `pending`
-  and the human submitted in the meantime, you may find a fresh round instead
-  of their answer (nothing is lost: your threads are still there and they
-  only need to resubmit).
+  starting over. If the human submits after this command has already exited,
+  the submission is held for you: the next run of the command returns it,
+  however long you wait before running it again.
 - `no_changes` — there was nothing to review.
 - `aborted` — the review was cancelled, or the server was stopped. This is
   **not** approval.

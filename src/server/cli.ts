@@ -320,6 +320,22 @@ async function main(): Promise<void> {
   }
   await removeServerRecord(stateDir);
 
+  // The server that handled the previous round may have received a
+  // submission, written result.json, and exited before this invocation ever
+  // started — the CLI is re-entrant, so nothing was left waiting for it.
+  // `waitForResult` deletes the file the moment it delivers it to an
+  // invocation, so its mere presence here reliably means "submitted but
+  // never yet delivered", never a stale leftover. Delivering it must happen
+  // before `openRound` below touches state.json, or this round's own result
+  // is lost and a fresh round gets opened (and the round counter advanced)
+  // for a review that had already finished.
+  const unconsumed = await readFile(join(stateDir, RESULT_FILE), 'utf8').catch(() => null);
+  if (unconsumed !== null) {
+    await rm(join(stateDir, RESULT_FILE), { force: true });
+    emit(JSON.parse(unconsumed) as CliResult);
+    return;
+  }
+
   const request = await consumeRequest(stateDir);
   const range = await resolveRange(options.base === 'auto' ? request.base : options.base, { cwd: root });
 
@@ -333,7 +349,9 @@ async function main(): Promise<void> {
   await writeState(stateDir, state);
   // Delete any leftover result.json from a previous round before spawning the
   // new server, so a crash-recovery read of this round can never pick up an
-  // outcome that belongs to a round that already finished.
+  // outcome that belongs to a round that already finished. (Any genuinely
+  // unconsumed result was already delivered and returned above, before
+  // reaching this point.)
   await rm(join(stateDir, RESULT_FILE), { force: true });
 
   const token = makeToken();

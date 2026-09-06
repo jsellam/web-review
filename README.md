@@ -112,12 +112,12 @@ that. The review server runs as its own detached process, independent of the
 CLI invocation that started it, so when the foreground command's `--timeout`
 elapses it can print `pending` and exit without tearing anything down. Running
 the command again from the same repository reattaches to that same server —
-same port, same token — and resumes waiting. Do this promptly: if you let a
-long time pass after a `pending` result and the review is submitted with
-nobody attached to catch it, the CLI treats the server as gone and opens a
-fresh round instead of returning that submission (your existing threads are
-preserved either way, just not that round's verdict — the reviewer only needs
-to hit submit once more).
+same port, same token — and resumes waiting. If the review is submitted after
+the server has already exited (it shuts itself down shortly after a
+submission), with no invocation left attached to catch it, the result is not
+lost: it is held on disk, and the next run of the command returns it as a
+finished `submitted` result rather than opening a fresh round, no matter how
+long you wait before running it again.
 
 ## What lives in `.git/web-review/`
 
