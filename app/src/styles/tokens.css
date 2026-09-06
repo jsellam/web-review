@@ -47,6 +47,14 @@
   --del-hl:      light-dark(#f8b9b4, rgba(248, 81, 73, 0.48));
   --del-gutter:  light-dark(#fbd0cd, rgba(248, 81, 73, 0.34));
   --del-fg:      light-dark(#cf222e, #ff7b72);
+
+  /* Syntax highlighting. */
+  --syntax-keyword: light-dark(#7c3aed, #a78bfa);
+  --syntax-string:  light-dark(#0a7d5a, #7dd3a0);
+  --syntax-comment: light-dark(#a5aab3, #5c626c);
+  --syntax-number:  light-dark(#0550ae, #79c0ff);
+  --syntax-title:   light-dark(#6639ba, #d2a8ff);
+  --syntax-attr:    light-dark(#0a3069, #7ee787);
 }
 
 /*

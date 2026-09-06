@@ -1,5 +1,6 @@
 import './styles/tokens.css';
 import './styles/reset.css';
+import './styles/diff-theme.css';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { ThemeProvider } from './theme.js';

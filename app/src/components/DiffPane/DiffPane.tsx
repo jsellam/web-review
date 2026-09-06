@@ -30,10 +30,10 @@
 //   when the library decides a widget line is open, and to close it via the
 //   `onClose` it hands us.
 import { useMemo } from 'react';
-import { Alert, Skeleton } from 'antd';
 import { DiffModeEnum, DiffView, SplitSide } from '@git-diff-view/react';
 import { generateDiffFile } from '@git-diff-view/file';
 import '@git-diff-view/react/styles/diff-view.css';
+import styles from './DiffPane.module.css';
 import { useFileContents } from './useFileContents.js';
 import { useResolvedTheme } from '../../theme.js';
 import { buildExtendData } from './extendData.js';
@@ -99,8 +99,8 @@ export function DiffPane({ api, file, mode, enabled, threads }: Props) {
     return instance;
   }, [file.oldPath, file.path, older, newer]);
 
-  if (error) return <Alert type="error" message={error} showIcon />;
-  if (loading || !diffFile) return <Skeleton active paragraph={{ rows: 4 }} />;
+  if (error) return <p className={styles.error}>{error}</p>;
+  if (loading || !diffFile) return <p className={styles.loading}>Loading diff…</p>;
 
   return (
     <>
@@ -123,7 +123,7 @@ export function DiffPane({ api, file, mode, enabled, threads }: Props) {
           // `data` and used it directly, which throws here.
           if (!data) return null;
           return (
-            <div style={{ padding: '0 16px' }}>
+            <div className={styles.row}>
               {data.threads.map((thread) => (
                 <CommentThread key={thread.id} thread={thread} />
               ))}
@@ -139,7 +139,7 @@ export function DiffPane({ api, file, mode, enabled, threads }: Props) {
           );
         }}
         renderWidgetLine={({ side, lineNumber, onClose }) => (
-          <div style={{ padding: '0 16px' }}>
+          <div className={styles.row}>
             <CommentComposer
               onSubmit={(body) => {
                 setComment(file.path, sideOf(side), lineNumber, body);
