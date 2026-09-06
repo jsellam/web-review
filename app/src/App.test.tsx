@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { App } from './App.js';
+import { useDraftStore } from './state/draft.js';
 import type { ReviewApi } from './api/client.js';
 import type { SessionPayload } from '../../src/shared/types.js';
 
@@ -57,5 +59,19 @@ describe('App', () => {
     render(<App api={failing} />);
 
     expect(await screen.findByText('invalid token')).toBeInTheDocument();
+  });
+
+  it('counts pending drafts on the Review button and ends on a success screen', async () => {
+    useDraftStore.getState().reset();
+    useDraftStore.getState().setComment('src/auth.ts', 'new', 2, 'rename this');
+
+    render(<App api={api} />);
+
+    expect(await screen.findByTitle('1')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^review$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /submit review/i }));
+
+    expect(await screen.findByText('Review submitted')).toBeInTheDocument();
   });
 });

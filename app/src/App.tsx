@@ -1,12 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Alert, ConfigProvider, Layout, Segmented, Space, Spin, Typography, theme } from 'antd';
+import {
+  Alert,
+  Badge,
+  Button,
+  ConfigProvider,
+  Layout,
+  Result,
+  Segmented,
+  Space,
+  Spin,
+  Typography,
+  theme,
+} from 'antd';
 import { useIsDark } from './theme.js';
 import { FileTree } from './components/FileTree/FileTree.js';
 import { countThreadsByFile } from './components/FileTree/tree.js';
 import { FileSection } from './components/FileSection/FileSection.js';
 import { SummaryPanel } from './components/SummaryPanel/SummaryPanel.js';
 import { DiffPane, type ViewMode } from './components/DiffPane/index.js';
-import { useDraftStore } from './state/draft.js';
+import { SubmitDrawer } from './components/SubmitDrawer/SubmitDrawer.js';
+import { pendingCount, useDraftStore } from './state/draft.js';
 import type { ReviewApi } from './api/client.js';
 import type { SessionPayload } from '../../src/shared/types.js';
 
@@ -19,12 +32,27 @@ export function App({ api }: Props) {
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<ViewMode>('split');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [done, setDone] = useState(false);
   const viewed = useDraftStore((state) => state.viewed);
   const setViewed = useDraftStore((state) => state.setViewed);
+  const pending = useDraftStore(pendingCount);
 
   useEffect(() => {
     api.getSession().then(setSession, (e: Error) => setError(e.message));
   }, [api]);
+
+  if (done) {
+    return (
+      <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+        <Result
+          status="success"
+          title="Review submitted"
+          subTitle="The agent has your feedback. You can close this tab."
+        />
+      </ConfigProvider>
+    );
+  }
 
   return (
     <ConfigProvider
@@ -49,6 +77,11 @@ export function App({ api }: Props) {
               { label: 'Unified', value: 'unified' },
             ]}
           />
+          <Badge count={pending}>
+            <Button type="primary" onClick={() => setDrawerOpen(true)}>
+              Review
+            </Button>
+          </Badge>
         </Layout.Header>
 
         <Layout>
@@ -96,6 +129,16 @@ export function App({ api }: Props) {
           </Layout.Content>
         </Layout>
       </Layout>
+
+      <SubmitDrawer
+        api={api}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onSubmitted={() => {
+          setDrawerOpen(false);
+          setDone(true);
+        }}
+      />
     </ConfigProvider>
   );
 }
