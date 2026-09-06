@@ -86,6 +86,7 @@ export function App({ api }: Props) {
                         file={file}
                         mode={mode}
                         enabled={!(viewed[file.path] ?? false)}
+                        threads={session.threads.filter((t) => t.file === file.path)}
                       />
                     </FileSection>
                   </div>
