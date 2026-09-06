@@ -1,7 +1,7 @@
 /*
  * @git-diff-view/react ships its own palette on
  * `.diff-tailwindcss-wrapper[data-theme=…] .diff-style-root`. We re-point its
- * 19 custom properties at our tokens so the diff — most of the pixels on
+ * 20 custom properties at our tokens so the diff — most of the pixels on
  * screen — belongs to the same design system as the chrome around it.
  *
  * The leading `html` is deliberate: the library's rule has exactly the same
