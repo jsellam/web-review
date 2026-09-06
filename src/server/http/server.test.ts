@@ -319,3 +319,67 @@ describe('POST /api/review double-submission guard', () => {
     }
   });
 });
+
+describe('server.json liveness record on submission', () => {
+  it('is gone the instant a submission is accepted, before the response is even sent', async () => {
+    // Pins the actual defect: the server used to only remove server.json 250ms
+    // later, inside close(), which left it alive and answering for the whole
+    // gap between "submission accepted" and "process actually exits". A CLI
+    // invocation landing in that gap took the re-attach path and waited out
+    // its full timeout for a result.json that would never reappear. Asserting
+    // with no sleep, immediately after the response, is what makes this test
+    // pin the fix rather than the eventual close()-time cleanup.
+    const response = await call('/api/review', {
+      method: 'POST',
+      body: JSON.stringify({ verdict: 'approve' }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await readServerRecord(dir)).toBeNull();
+  });
+
+  it('leaves close() safe to call when the record is already gone', async () => {
+    await call('/api/review', { method: 'POST', body: JSON.stringify({ verdict: 'approve' }) });
+    expect(await readServerRecord(dir)).toBeNull();
+
+    // afterEach also calls handle.close() — this call plus that one models
+    // close() running twice against an already-removed record, which must
+    // never throw or produce an unhandled rejection.
+    await expect(handle.close()).resolves.toBeUndefined();
+  });
+
+  it('leaves the record intact when onSubmit rejects before persisting anything', async () => {
+    // The retry contract (see the double-submission guard tests above)
+    // depends on a failed, not-yet-persisted submission leaving the server
+    // exactly as usable as before — including still being a valid re-attach
+    // target. The record must only be removed on the accepted path.
+    const rejectingDir = await mkdtemp(join(tmpdir(), 'web-review-server-reject-'));
+    await writeFile(join(rejectingDir, 'index.html'), '<html>app</html>', 'utf8');
+
+    const rejectingHandle = await startServer({
+      staticRoot: rejectingDir,
+      stateDir: rejectingDir,
+      port: 0,
+      token,
+      getSession: async () => session,
+      getFile: async () => null,
+      onSubmit: async () => {
+        throw new Error('disk full');
+      },
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${rejectingHandle.port}/api/review`, {
+        method: 'POST',
+        headers: { 'x-review-token': token },
+        body: JSON.stringify({ verdict: 'approve' }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(await readServerRecord(rejectingDir)).not.toBeNull();
+    } finally {
+      await rejectingHandle.close();
+      await rm(rejectingDir, { recursive: true, force: true });
+    }
+  });
+});

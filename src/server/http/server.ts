@@ -119,6 +119,16 @@ export async function startServer(options: StartOptions): Promise<ServerHandle> 
             }
             submitting = false;
             submitted = true;
+            // A submission has now been fully accepted: this server has
+            // nothing further to deliver and is about to shut down (see
+            // serveMain in cli.ts). Removing the liveness record here, before
+            // the response is sent, closes the window between "submitted"
+            // and "actually exited" during which a concurrent CLI invocation
+            // could otherwise read server.json, find the process still
+            // answering, and take the re-attach path — waiting out its full
+            // timeout for a result.json that has already been consumed, then
+            // handing back a URL to a server that has since exited.
+            await removeServerRecord(options.stateDir);
             for (const waiter of [...waiters]) waiter(true);
             return result;
           },

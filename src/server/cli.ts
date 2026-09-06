@@ -197,6 +197,10 @@ async function serveMain(cwd: string, stateDir: string): Promise<void> {
   });
 
   await handle.waitForSubmission(24 * 60 * 60 * 1000);
+  // server.json is already gone by now — startServer's submit handler
+  // removes it the instant a submission is accepted, not here at close.
+  // This delay exists only to give the HTTP response time to actually reach
+  // the browser before the process exits; it is not a liveness window.
   setTimeout(() => void handle.close().then(() => process.exit(0)), 250).unref();
 }
 

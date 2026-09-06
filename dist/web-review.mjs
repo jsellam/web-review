@@ -775,6 +775,7 @@ async function startServer(options) {
             }
             submitting = false;
             submitted = true;
+            await removeServerRecord(options.stateDir);
             for (const waiter of [...waiters]) waiter(true);
             return result;
           }
