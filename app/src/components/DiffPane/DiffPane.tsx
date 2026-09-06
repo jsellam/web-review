@@ -35,7 +35,7 @@ import { DiffModeEnum, DiffView, SplitSide } from '@git-diff-view/react';
 import { generateDiffFile } from '@git-diff-view/file';
 import '@git-diff-view/react/styles/diff-view.css';
 import { useFileContents } from './useFileContents.js';
-import { useIsDark } from '../../theme.js';
+import { useResolvedTheme } from '../../theme.js';
 import { buildExtendData } from './extendData.js';
 import { CommentThread } from '../CommentThread/CommentThread.js';
 import { CommentComposer } from '../CommentComposer/CommentComposer.js';
@@ -65,7 +65,7 @@ function sideOf(side: SplitSide): Side {
 }
 
 export function DiffPane({ api, file, mode, enabled, threads }: Props) {
-  const isDark = useIsDark();
+  const theme = useResolvedTheme();
   const { old: older, next: newer, loading, error } = useFileContents(api, file, enabled);
   const drafts = useDraftStore((state) => state.comments);
   const setComment = useDraftStore((state) => state.setComment);
@@ -108,7 +108,7 @@ export function DiffPane({ api, file, mode, enabled, threads }: Props) {
         diffFile={diffFile}
         diffViewHighlight
         diffViewWrap={false}
-        diffViewTheme={isDark ? 'dark' : 'light'}
+        diffViewTheme={theme}
         diffViewMode={mode === 'split' ? DiffModeEnum.Split : DiffModeEnum.Unified}
         diffViewAddWidget
         extendData={extendData}
