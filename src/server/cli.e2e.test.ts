@@ -579,7 +579,7 @@ describe('the CLI', () => {
 
     const { stdout, stderr } = await prepare(['--base', 'no-such-ref']);
 
-    expect(stderr).toContain('web-review: unknown base ref: no-such-ref');
+    expect(stderr.trim()).toBe('web-review: unknown base ref: no-such-ref');
     expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
   });
 

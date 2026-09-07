@@ -135,6 +135,17 @@ function emitText(text: string, code = 0, stream: NodeJS.WriteStream = process.s
   stream.write(text, () => process.exit(code));
 }
 
+/**
+ * Deliberate failures already carry the `web-review:` prefix from where they
+ * were raised (`resolveRange`, `RequestError`); a GitError or an unexpected
+ * throw does not. Add it only where it is missing, so a bad ref does not come
+ * back as "web-review: web-review: unknown base ref".
+ */
+function prefixed(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'unexpected error';
+  return message.startsWith('web-review: ') ? message : `web-review: ${message}`;
+}
+
 function openBrowser(url: string): void {
   const command =
     process.platform === 'darwin' ? 'open'
@@ -394,11 +405,7 @@ async function main(): Promise<void> {
     try {
       await prepareMain(root, options);
     } catch (error) {
-      emitText(
-        `web-review: ${error instanceof Error ? error.message : 'unexpected error'}\n`,
-        1,
-        process.stderr,
-      );
+      emitText(`${prefixed(error)}\n`, 1, process.stderr);
     }
     return;
   }
