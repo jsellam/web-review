@@ -20,12 +20,14 @@ Run a human code review of your own changes and act on the result.
 
    ```
      old  new
-   == src/auth.ts  modified  +2 -1
-   @@ -86,4 +86,5 @@
-      86   86    const token = sign(user);
-      88    .  - await wait(500);
-       .   88  + await wait(delay);
-      89   90    return token;
+   == src/auth.ts  modified  +1 -1
+   @@ -85,5 +85,5 @@
+      85   85      const user = req.user;
+      86   86      const token = sign(user);
+      87   87      audit(user, token);
+      88    .  -   await wait(500);
+       .   88  +   await wait(delay);
+      89   89      return token;
    ```
 
    Read the number off the column matching the `side` you want to annotate:
@@ -102,7 +104,7 @@ human decide.
 }
 ```
 
-Write that to the same `request.json` as in step 1, together with a `summary`
+Write that to the same `request.json` as in step 2, together with a `summary`
 of what you changed, then run the command again to open the next round.
 Threads carry across rounds, so the human sees your reply next to their
 original comment.
