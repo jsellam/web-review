@@ -9,7 +9,14 @@ Run a human code review of your own changes and act on the result.
 
 ## Steps
 
-1. Write `.git/web-review/request.json` describing what you did:
+1. Write `<git-dir>/web-review/request.json` describing what you did, where
+   `<git-dir>` is what `git rev-parse --absolute-git-dir` prints. Resolve it;
+   do not assume `.git/`, which in a worktree is a *file* pointing elsewhere,
+   so the literal path `.git/web-review/` can neither be read nor created:
+
+   ```bash
+   mkdir -p "$(git rev-parse --absolute-git-dir)/web-review"
+   ```
 
    ```json
    {
@@ -35,10 +42,11 @@ Run a human code review of your own changes and act on the result.
 ## What each status means
 
 - `pending` — the reviewer is still reading. **Run the command again**, from
-  the same repository. It is not a result: do not treat it as approval and do
-  not start editing. The review server keeps running in the background even
-  after this command exits, so re-running reattaches to it instead of
-  starting over. If the human submits after this command has already exited,
+  the same repository, exactly as before — do not write `request.json` again:
+  the round is already open and your summary and annotations are already in
+  it. It is not a result: do not treat it as approval and do not start
+  editing. The review server keeps running in the background even after this
+  command exits, so re-running reattaches to it instead of starting over. If the human submits after this command has already exited,
   the submission is held for you: the next run of the command returns it,
   however long you wait before running it again.
 - `no_changes` — there was nothing to review.
@@ -65,9 +73,10 @@ human decide.
 }
 ```
 
-Write that to `.git/web-review/request.json` together with a `summary` of what
-you changed, then run the command again to open the next round. Threads carry
-across rounds, so the human sees your reply next to their original comment.
+Write that to the same `request.json` as in step 1, together with a `summary`
+of what you changed, then run the command again to open the next round.
+Threads carry across rounds, so the human sees your reply next to their
+original comment.
 
 Threads with `"status": "outdated"` were anchored to lines that no longer exist.
 Read them for intent; do not try to apply them literally.

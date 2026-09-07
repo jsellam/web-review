@@ -2,9 +2,10 @@
 
 // src/server/cli.ts
 import { spawn } from "node:child_process";
-import { readFile as readFile6, rename as rename2, rm as rm3, writeFile as writeFile3 } from "node:fs/promises";
-import { join as join6 } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { readFile as readFile6, rename as rename2, rm as rm3, unlink, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname, join as join6 } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // src/shared/protocol.ts
 var RESULT_START = "<<<WEB_REVIEW_RESULT";
@@ -906,7 +907,8 @@ function openBrowser(url) {
   } catch {
   }
 }
-var moduleDir = fileURLToPath(new URL(".", import.meta.url));
+var modulePath = fileURLToPath(import.meta.url);
+var moduleDir = dirname(modulePath);
 async function serveMain(cwd, stateDir) {
   const session = JSON.parse(await readFile6(join6(stateDir, SESSION_FILE), "utf8"));
   const range = { base: session.base, label: session.label, staged: session.staged };
@@ -999,6 +1001,15 @@ async function acquireSpawnLock(stateDir) {
 async function releaseSpawnLock(stateDir) {
   await rm3(join6(stateDir, LOCK_FILE), { force: true });
 }
+async function discardRequest(stateDir) {
+  try {
+    await unlink(join6(stateDir, REQUEST_FILE));
+    return true;
+  } catch (error) {
+    if (isENOENT(error)) return false;
+    throw error;
+  }
+}
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
@@ -1031,8 +1042,19 @@ async function main() {
   }
   const existing = await readServerRecord(stateDir);
   if (existing && await isServerAlive(existing)) {
+    const discarded = await discardRequest(stateDir);
     const result2 = await waitForResult(stateDir, options.timeoutSeconds);
-    emit(result2 ?? pendingResult(`http://127.0.0.1:${existing.port}/?t=${existing.token}`));
+    if (result2) {
+      emit(result2);
+      return;
+    }
+    const pending = pendingResult(`http://127.0.0.1:${existing.port}/?t=${existing.token}`);
+    emit(
+      discarded ? {
+        ...pending,
+        message: `a review was already open, so ${REQUEST_FILE} described that round and was consumed rather than held for the next one. Re-run the command as-is; there is no need to write it again.`
+      } : pending
+    );
     return;
   }
   await removeServerRecord(stateDir);
@@ -1068,7 +1090,7 @@ async function main() {
   let serverRecord;
   if (shouldSpawn) {
     try {
-      spawn(process.execPath, [process.argv[1], "--__serve"], {
+      spawn(process.execPath, [modulePath, "--__serve"], {
         cwd: root,
         detached: true,
         stdio: "ignore"
@@ -1102,7 +1124,16 @@ async function waitForRecord(stateDir) {
   }
   return null;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isEntryPoint() {
+  const entry = process.argv[1];
+  if (entry === void 0) return false;
+  try {
+    return realpathSync(entry) === realpathSync(modulePath);
+  } catch {
+    return false;
+  }
+}
+if (isEntryPoint()) {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => emit(abortedResult(), 130));
   }

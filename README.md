@@ -78,8 +78,10 @@ loopback binding alone doesn't stop that, because the attacker's page and the
 review server would both be reachable at the same address. The `Host` check
 closes that gap.
 
-Review state lives in `.git/web-review/`, never in the working tree — a file at
-the repo root would show up inside the diff being reviewed.
+Review state lives in git's own directory (`git rev-parse --absolute-git-dir`,
+so `.git/web-review/` in an ordinary checkout and `.git/worktrees/<name>/web-review/`
+in a worktree), never in the working tree — a file at the repo root would show
+up inside the diff being reviewed.
 
 ## Development
 
