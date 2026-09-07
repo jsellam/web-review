@@ -12,7 +12,8 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useIsDark } from './theme.js';
+import { useResolvedTheme } from './theme.js';
+import { ThemeToggle } from './components/ThemeToggle/ThemeToggle.js';
 import { FileTree } from './components/FileTree/FileTree.js';
 import { countThreadsByFile } from './components/FileTree/tree.js';
 import { FileSection } from './components/FileSection/FileSection.js';
@@ -28,7 +29,7 @@ interface Props {
 }
 
 export function App({ api }: Props) {
-  const isDark = useIsDark();
+  const resolved = useResolvedTheme();
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<ViewMode>('split');
@@ -45,7 +46,7 @@ export function App({ api }: Props) {
 
   if (done) {
     return (
-      <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+      <ConfigProvider theme={{ algorithm: resolved === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
         <Result
           status="success"
           title="Review submitted"
@@ -85,7 +86,7 @@ export function App({ api }: Props) {
 
   return (
     <ConfigProvider
-      theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}
+      theme={{ algorithm: resolved === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}
     >
       <Layout style={{ minHeight: '100vh' }}>
         <Layout.Header style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -106,6 +107,7 @@ export function App({ api }: Props) {
               { label: 'Unified', value: 'unified' },
             ]}
           />
+          <ThemeToggle />
           <Badge count={pending}>
             <Button type="primary" onClick={() => setDrawerOpen(true)}>
               Review

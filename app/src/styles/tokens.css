@@ -1,0 +1,66 @@
+:root {
+  /*
+   * `color-scheme: light dark` is what makes light-dark() work: it declares
+   * this page supports both, so the second argument is used whenever the
+   * used colour scheme is dark. It also makes the browser's own UI —
+   * scrollbars, form controls, the canvas behind the page — follow suit.
+   */
+  color-scheme: light dark;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-1: 11px;
+  --text-2: 12px;
+  --text-3: 13px;
+  --text-4: 15px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --radius-1: 4px;
+  --radius-2: 6px;
+  --radius-3: 8px;
+
+  /* Graphite.                     light        dark */
+  --bg:             light-dark(#ffffff,    #0d0e11);
+  --bg-raised:      light-dark(#fafbfc,    #131519);
+  --bg-sunk:        light-dark(#f1f2f5,    #0a0b0d);
+  --fg:             light-dark(#14161a,    #e6e8ec);
+  --fg-muted:       light-dark(#3d434d,    #c3c7cf);
+  --fg-subtle:      light-dark(#8b909a,    #71767f);
+  --border:         light-dark(#e6e8ec,    #22252b);
+  --border-strong:  light-dark(#c9cdd4,    #33373f);
+  --accent:         light-dark(#4f57e0,    #6a72f2);
+  --accent-fg:      light-dark(#ffffff,    #ffffff);
+  --accent-hover:   light-dark(#3f47c9,    #7f86f5);
+
+  /* Diff — intensity level 2. */
+  --add-bg:      light-dark(#ddf4e4, rgba(46, 160, 67, 0.26));
+  --add-hl:      light-dark(#a9e8bb, rgba(63, 185, 80, 0.50));
+  --add-gutter:  light-dark(#cbecd6, rgba(46, 160, 67, 0.38));
+  --add-fg:      light-dark(#1a7f37, #56d364);
+  --del-bg:      light-dark(#fddfdd, rgba(248, 81, 73, 0.24));
+  --del-hl:      light-dark(#f8b9b4, rgba(248, 81, 73, 0.48));
+  --del-gutter:  light-dark(#fbd0cd, rgba(248, 81, 73, 0.34));
+  --del-fg:      light-dark(#cf222e, #ff7b72);
+
+  /* Syntax highlighting. */
+  --syntax-keyword: light-dark(#7c3aed, #a78bfa);
+  --syntax-string:  light-dark(#0a7d5a, #7dd3a0);
+  --syntax-comment: light-dark(#a5aab3, #5c626c);
+  --syntax-number:  light-dark(#0550ae, #79c0ff);
+  --syntax-title:   light-dark(#6639ba, #d2a8ff);
+  --syntax-attr:    light-dark(#0a3069, #7ee787);
+}
+
+/*
+ * The manual selector. With no attribute the `light dark` pair above lets the
+ * system preference decide; these two rules pin it. No token is repeated —
+ * light-dark() re-resolves every one of them against the new color-scheme.
+ */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }

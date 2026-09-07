@@ -1,0 +1,54 @@
+/*
+ * @git-diff-view/react ships its own palette on
+ * `.diff-tailwindcss-wrapper[data-theme=…] .diff-style-root`. We re-point its
+ * 20 custom properties at our tokens so the diff — most of the pixels on
+ * screen — belongs to the same design system as the chrome around it.
+ *
+ * The leading `html` is deliberate: the library's rule has exactly the same
+ * specificity, so without it the winner would depend on the order Vite happens
+ * to emit the stylesheets in.
+ */
+html .diff-tailwindcss-wrapper[data-theme="light"] .diff-style-root,
+html .diff-tailwindcss-wrapper[data-theme="dark"] .diff-style-root {
+  --diff-border--: var(--border);
+
+  --diff-add-content--: var(--add-bg);
+  --diff-add-content-highlight--: var(--add-hl);
+  --diff-add-lineNumber--: var(--add-gutter);
+  --diff-add-widget--: var(--add-hl);
+  --diff-add-widget-color--: var(--fg);
+
+  --diff-del-content--: var(--del-bg);
+  --diff-del-content-highlight--: var(--del-hl);
+  --diff-del-lineNumber--: var(--del-gutter);
+
+  --diff-plain-content--: var(--bg);
+  --diff-plain-lineNumber--: var(--bg-raised);
+  --diff-plain-lineNumber-color--: var(--fg-subtle);
+
+  --diff-empty-content--: var(--bg-sunk);
+
+  --diff-hunk-content--: var(--bg-raised);
+  --diff-hunk-content-color--: var(--fg-subtle);
+  --diff-hunk-lineNumber--: var(--bg-sunk);
+  --diff-hunk-lineNumber-hover--: var(--border);
+
+  --diff-expand-content--: var(--bg-raised);
+  --diff-expand-lineNumber--: var(--bg-sunk);
+  --diff-expand-lineNumber-color--: var(--fg-subtle);
+}
+
+html .diff-tailwindcss-wrapper .hljs-keyword,
+html .diff-tailwindcss-wrapper .hljs-literal { color: var(--syntax-keyword); }
+html .diff-tailwindcss-wrapper .hljs-string { color: var(--syntax-string); }
+html .diff-tailwindcss-wrapper .hljs-comment,
+html .diff-tailwindcss-wrapper .hljs-quote { color: var(--syntax-comment); }
+html .diff-tailwindcss-wrapper .hljs-number { color: var(--syntax-number); }
+html .diff-tailwindcss-wrapper .hljs-title,
+html .diff-tailwindcss-wrapper .hljs-name { color: var(--syntax-title); }
+html .diff-tailwindcss-wrapper .hljs-type,
+html .diff-tailwindcss-wrapper .hljs-built { color: var(--syntax-title); }
+html .diff-tailwindcss-wrapper .hljs-attr,
+html .diff-tailwindcss-wrapper .hljs-property { color: var(--syntax-attr); }
+html .diff-tailwindcss-wrapper .hljs-punctuation,
+html .diff-tailwindcss-wrapper .hljs-operator { color: var(--fg-muted); }

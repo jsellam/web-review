@@ -1,179 +1,98 @@
 # web-review
 
-A local, GitHub-style code review tool for the changes a coding agent just
-made — run entirely on your own machine.
+The simplest way to review the code your agent just wrote.
 
-## What it is
+Your agent finishes its work and opens a real "Files changed" page in your
+browser. You read it like a pull request, comment on the lines you care about,
+and hit **Review**. The agent gets your comments and gets back to work.
 
-After your agent finishes a batch of edits, `web-review` opens the diff in a
-real "Files changed"-style UI in your browser: a file tree, split or unified
-view, syntax highlighting, and line-anchored comments. You review it like a
-pull request. When you submit, the agent gets your verdict and every comment
-back as structured JSON and acts on it — no copy-pasting, no context lost
-between you and the model.
+Everything runs on your machine. No account, no service, nothing to configure.
 
-## Why not just read `git diff`
-
-A pager gives you the diff and nothing else:
-
-- **Comments are anchored to lines**, not typed into a chat box next to a file
-  path and a line number you have to get right by hand.
-- **Threads survive across rounds.** Comment, the agent replies or pushes a
-  fix, and the next round shows your original comment and its reply side by
-  side — even if the line it was on has since moved.
-- **The agent speaks first.** It writes a summary of what it did and its own
-  annotations on the lines it's unsure about, so you start reading with
-  context instead of a bare diff.
+|                       Light                       |                      Dark                       |
+| :-----------------------------------------------: | :---------------------------------------------: |
+| ![web-review in light theme](docs/screenshots/review-light.png) | ![web-review in dark theme](docs/screenshots/review-dark.png) |
 
 ## Install
 
-```bash
-git clone https://github.com/jsellam/web-review.git ~/.claude/skills/web-review
-```
-
-There is no `npm install` step to use the tool. The browser bundle
-(`app/dist/`) and the server (`dist/web-review.mjs`) are committed to the
-repository, already built. `dist/web-review.mjs` is a single file with no
-runtime dependencies beyond Node itself (`>=18.17`) — everything it needs is
-bundled in.
-
-`npm install` is only needed if you're developing `web-review` itself; see
-[Development](#development).
-
-## Use
-
-**Agent-driven** (see `SKILL.md` / `AGENTS.md` for the full contract): the
-agent writes `.git/web-review/request.json` with a summary of its changes and
-any annotations, then runs
+One command, whichever agent you use:
 
 ```bash
-node ~/.claude/skills/web-review/dist/web-review.mjs
+npx skills add jsellam/web-review -g
 ```
 
-from the repository root. The command blocks (up to `--timeout`), opens your
-browser, and prints a framed JSON result once you submit.
+That's it. Claude Code, Codex, Cursor, Gemini CLI and seventy-odd others are
+supported — [`skills`](https://github.com/vercel-labs/skills) asks which ones
+you want and installs to each. Drop the `-g` to scope it to the current
+repository instead.
 
-**Standalone**, no agent involved: run the same command in any git repository
-to review your own working tree or staged changes.
+There is nothing to build and no `npm install`: the whole tool is one
+self-contained file that needs Node `>=18.17` and nothing else.
 
-```bash
-node dist/web-review.mjs                 # working tree vs the base it picks automatically
-node dist/web-review.mjs main            # working tree vs main
-node dist/web-review.mjs --staged        # index vs HEAD
-```
+## Using it
 
-## Flags
+You don't run anything. The agent opens the review itself, when it matters:
+after a batch of edits, and before it commits or pushes. If it forgets, ask:
 
-| Flag | Default | What it does |
-|---|---|---|
-| `[ref]` / `--base <ref>` | `auto` | What to diff against. `auto` diffs the working tree against `HEAD` if it's dirty, otherwise against the merge-base with the first of `main`/`master`/`develop` it finds. Any other value is a resolvable git ref. |
-| `--staged` | off | Diff the index against `HEAD` instead of the working tree. |
-| `--timeout <seconds>` | `540` | How long this invocation blocks waiting for a result before printing `pending` and exiting. The review itself is not cancelled — see [The JSON contract](#the-json-contract). |
-| `--port <n>` | `0` (OS-assigned) | Port for the local review server. |
-| `--no-open` | off (browser opens) | Don't open a browser automatically; print the URL instead. |
-| `--stop` | — | Stop a review server running for this repository and exit. |
+> review your changes
 
-## The JSON contract
+Your browser opens on the diff. From there it is GitHub, with the parts that
+matter: file tree, split or unified, syntax highlighting, *Viewed* checkboxes,
+and comments you attach to a line by clicking it. When you're done, **Review**
+lets you approve, request changes, or just leave notes.
 
-Input: `.git/web-review/request.json`, written by the agent before running the
-command. All fields are optional.
+The agent is blocked on you the whole time, so nothing lands behind your back.
+Take five minutes or take an hour — it waits, and picks up exactly where you
+left it.
 
-```json
-{
-  "summary": "Markdown. What changed and why.",
-  "base": "auto",
-  "annotations": [
-    { "file": "src/auth.ts", "line": 88, "side": "new", "body": "..." }
-  ],
-  "replies": [
-    { "threadId": "t3", "body": "..." }
-  ]
-}
-```
+## Why it beats reading the diff in your terminal
 
-`request.json`'s `base` only takes effect when no `--base`/`--staged`/positional
-ref is given on the command line; a command-line value always wins.
+**The agent goes first.** Before you look at anything, it writes what it did and
+why, and pins notes to the lines it isn't sure about — a hard-coded value, debt
+it took on, a refactor it isn't certain you want. You start reading with
+context instead of a bare diff.
 
-Output: one JSON object, framed between `<<<WEB_REVIEW_RESULT` and
-`WEB_REVIEW_RESULT>>>` on stdout (the markers survive incidental logging
-around them).
+![An agent annotation anchored to a changed line](docs/screenshots/annotation-thread.png)
 
-| `status` | Exit code | Meaning |
-|---|---|---|
-| `submitted` | 0 | A round finished. `verdict` is `approve`, `request_changes`, or `comment`; `threads` has the full conversation. |
-| `pending` | 0 | Nobody has submitted yet within `--timeout`. `url` points at the still-running server. Run the command again. |
-| `no_changes` | 0 | The resolved diff was empty; nothing to review. |
-| `aborted` | 0 (130 on `SIGINT`/`SIGTERM`) | The review was cancelled or the server was stopped (`--stop`). Never treat this as approval. |
-| `error` | 1 | See `message`. |
+**Your comments land on the line.** No describing a file and a line number in
+chat and hoping the agent finds it.
 
-**Why `pending` is re-entrant.** Most agent harnesses cap how long a single
-tool call may run, and a human reviewing a diff can easily take longer than
-that. The review server runs as its own detached process, independent of the
-CLI invocation that started it, so when the foreground command's `--timeout`
-elapses it can print `pending` and exit without tearing anything down. Running
-the command again from the same repository reattaches to that same server —
-same port, same token — and resumes waiting. If the review is submitted after
-the server has already exited (it shuts itself down shortly after a
-submission), with no invocation left attached to catch it, the result is not
-lost: it is held on disk, and the next run of the command returns it as a
-finished `submitted` result rather than opening a fresh round, no matter how
-long you wait before running it again.
+**It's a conversation, not a one-shot.** You comment, the agent fixes it or
+pushes back with its reasoning, and the next round shows your original comment
+right next to its reply — even if the code moved in between. You keep going
+until it's right.
 
-## What lives in `.git/web-review/`
-
-Nothing here ever touches the working tree — a review-state file at the repo
-root would show up inside the diff being reviewed.
-
-| File | Written by | Purpose |
-|---|---|---|
-| `request.json` | the agent | This round's summary, annotations, and replies. Read once and deleted at the start of the round. |
-| `state.json` | the server | The durable review state: every thread, across every round, with its anchor and message history. |
-| `session.json` | the CLI | The current round's diff range, summary, port, and token — read by the detached server process. |
-| `server.json` | the server | Liveness record (`pid`, `port`, `token`, `startedAt`) so a later invocation can find and reattach to a running server. |
-| `result.json` | the server | Written once, when a submission is accepted; read and deleted by the CLI invocation that's waiting for it. |
-| `server.lock` | the CLI | A short-lived lock (cleared within milliseconds) that stops two near-simultaneous invocations from both spawning a server for the same repository. |
+**Nothing leaves your machine.** Your code, your comments, your review — all
+local.
 
 ## Security
 
-The server binds to `127.0.0.1` only, on a port chosen by the OS by default,
-and every request must carry a random per-session token (embedded in the URL
-that gets opened, and required on every API call). It also validates the
-`Host` header against `127.0.0.1:<port>` or `localhost:<port>` and rejects
-anything else.
+The server binds to `127.0.0.1` only, on a port chosen by the OS, and every
+request must carry a random per-session token (embedded in the URL that gets
+opened, and required on every API call). It also validates the `Host` header
+against `127.0.0.1:<port>` or `localhost:<port>` and rejects anything else.
 
-That last check matters specifically because of DNS rebinding: without it,
-any tab already open in your browser could point its own hostname at
-`127.0.0.1` and, once your browser resolves it, read your repository through
-this API — the loopback binding alone doesn't stop that, because the
-attacker's page and the review server would both be reachable at the same
-address. The `Host` check closes that gap.
+That last check matters specifically because of DNS rebinding: without it, any
+tab already open in your browser could point its own hostname at `127.0.0.1`
+and, once your browser resolves it, read your repository through this API — the
+loopback binding alone doesn't stop that, because the attacker's page and the
+review server would both be reachable at the same address. The `Host` check
+closes that gap.
+
+Review state lives in `.git/web-review/`, never in the working tree — a file at
+the repo root would show up inside the diff being reviewed.
 
 ## Development
 
 ```bash
 npm install
 npm test              # vitest run — server (node) + app (jsdom)
-npm run typecheck     # tsconfig.json + tsconfig.app.json
+npm run typecheck
 npm run build         # vite build (app/dist) + esbuild bundle (dist/web-review.mjs)
 ```
 
-`dist/` and `app/dist/` are committed. CI runs `npm run build` and then
-`git diff --exit-code dist app/dist` — if you changed source and didn't
-rebuild, CI fails.
-
-## Prior art
-
-| Tool | Feedback path | Rounds / threads | Agent summary + annotations |
-|---|---|---|---|
-| [diffx](https://github.com/wong2/diffx) | slash commands + server API | yes, agent replies | no |
-| [difit](https://github.com/yoshiko-pg/difit) | manual "Copy Prompt" | no (localStorage) | no |
-| [diffity](https://github.com/nilbuild/diffity) | `/diffity-resolve` | single pass | severity tags only |
-| [revu](https://github.com/eddmann/revu) | "Export for Agent" button | no | no |
-
-`web-review` differs in three ways at once: the agent writes its own summary
-and inline annotations before a human ever looks at the diff, comment threads
-persist and reanchor across as many rounds as it takes, and there is no `npm
-install` — clone it and run one file.
+`dist/` and `app/dist/` are committed; CI fails if you changed source without
+rebuilding. [`AGENTS.md`](AGENTS.md) is the contract the agent follows, if you
+want to see or change what it does.
 
 ## License
 
