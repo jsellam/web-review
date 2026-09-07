@@ -43,6 +43,15 @@ function marker(kind: NumberedLine['kind']): string {
   return kind === 'add' ? '+' : kind === 'del' ? '-' : ' ';
 }
 
+/**
+ * Two fixed-width number columns, side by side, so an agent can read the
+ * line number it needs straight off the side it cares about — old or new —
+ * without counting characters or lining anything up itself. `column` pads to
+ * a shared width so both sides stay aligned down the whole file; the two
+ * literal spaces after them separate the columns from the +/- marker, and
+ * the one space after the marker separates it from the text, so all three
+ * fields (numbers, marker, source line) stay visually distinct at a glance.
+ */
 function renderLine(line: NumberedLine): string {
   if (line.kind === 'hunk') return line.text;
   return `${column(line.old)}${column(line.new)}  ${marker(line.kind)} ${line.text}`;
@@ -53,11 +62,26 @@ function counts(entry: FileEntry): string {
 }
 
 function statusLabel(entry: FileEntry): string {
+  // `oldPath` is typed nullable even for a rename because the shared
+  // `FileEntry` type makes no promise about who set it; if it were ever
+  // missing here we still owe a label, so fall back to the bare status
+  // rather than printing "renamed from undefined".
   return entry.status === 'renamed' && entry.oldPath ?
       `renamed from ${entry.oldPath}`
     : entry.status;
 }
 
+/**
+ * One line naming a file: path, status, and either its change counts or a
+ * reason nothing follows. Binary suppresses the size note rather than
+ * showing "+0 -0" — git does not track additions/deletions for a binary
+ * diff, so those counts would be zero for every binary file regardless of
+ * how much actually changed, which is worse than not printing them. `note`
+ * is appended as one trailing clause instead of composed as a list because
+ * the three cases that use it (too large, omitted, and — implicitly —
+ * neither) are mutually exclusive per file: there is never more than one
+ * thing to say about why a body is or isn't shown.
+ */
 function header(entry: FileEntry, note = ''): string {
   const body = entry.binary ? 'binary — not shown' : counts(entry);
   return `== ${entry.path}  ${statusLabel(entry)}  ${body}${note}`;
