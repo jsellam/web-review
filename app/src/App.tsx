@@ -1,18 +1,7 @@
 import { useEffect, useState } from 'react';
-import {
-  Alert,
-  Badge,
-  Button,
-  ConfigProvider,
-  Layout,
-  Result,
-  Segmented,
-  Space,
-  Spin,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, ConfigProvider, Result, Spin, Typography, theme } from 'antd';
 import { useResolvedTheme } from './theme.js';
+import { Segmented } from './components/Segmented/Segmented.js';
 import { ThemeToggle } from './components/ThemeToggle/ThemeToggle.js';
 import { FileTree } from './components/FileTree/FileTree.js';
 import { countThreadsByFile } from './components/FileTree/tree.js';
@@ -23,6 +12,13 @@ import { SubmitDrawer } from './components/SubmitDrawer/SubmitDrawer.js';
 import { pendingCount, useDraftStore } from './state/draft.js';
 import type { ReviewApi } from './api/client.js';
 import type { NewComment, SessionPayload } from '../../src/shared/types.js';
+import styles from './App.module.css';
+
+/** Typed as ViewMode[] so Segmented's generic infers T = ViewMode. */
+const MODE_OPTIONS: { value: ViewMode; label: string }[] = [
+  { value: 'split', label: 'Split' },
+  { value: 'unified', label: 'Unified' },
+];
 
 interface Props {
   api: ReviewApi;
@@ -88,78 +84,93 @@ export function App({ api }: Props) {
     <ConfigProvider
       theme={{ algorithm: resolved === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}
     >
-      <Layout style={{ minHeight: '100vh' }}>
-        <Layout.Header style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Typography.Text strong style={{ color: '#fff' }}>web-review</Typography.Text>
+      <div className={styles.shell}>
+        <header className={styles.header}>
+          <span className={styles.brand}>web-review</span>
           {session ? (
-            <Space>
-              <Typography.Text style={{ color: '#fff' }}>{session.baseLabel}</Typography.Text>
-              <Typography.Text style={{ color: '#fff' }}>
-                {session.files.length} files
-              </Typography.Text>
-            </Space>
+            <>
+              <span className={styles.meta}>{session.baseLabel}</span>
+              <span className={styles.meta}>{session.files.length} files</span>
+            </>
           ) : null}
+
+          <div className={styles.spacer} />
+
+          {/*
+            `onChange={setMode}` would not type-check: a setState dispatch also
+            accepts an updater function, which widens Segmented's T to string.
+          */}
           <Segmented
+            legend="Diff view"
+            name="mode"
+            options={MODE_OPTIONS}
             value={mode}
-            onChange={(value) => setMode(value as ViewMode)}
-            options={[
-              { label: 'Split', value: 'split' },
-              { label: 'Unified', value: 'unified' },
-            ]}
+            onChange={(next) => setMode(next)}
           />
+
           <ThemeToggle />
-          <Badge count={pending}>
-            <Button type="primary" onClick={() => setDrawerOpen(true)}>
+
+          {/*
+            The counter is a sibling of the button, never a child: App.test.tsx
+            queries the button with the anchored name /^review$/i, and nesting
+            the count inside would make its accessible name "Review 1".
+            `title` is what findByTitle('1') matches, the way antd's Badge did.
+          */}
+          <span className={styles.reviewGroup}>
+            <button type="button" className={styles.review} onClick={() => setDrawerOpen(true)}>
               Review
-            </Button>
-          </Badge>
-        </Layout.Header>
+            </button>
+            {pending > 0 ? (
+              <span className={styles.count} title={String(pending)} aria-hidden="true">
+                {pending}
+              </span>
+            ) : null}
+          </span>
+        </header>
 
-        <Layout>
-          <Layout.Sider width={280} theme="light" style={{ padding: 12, overflow: 'auto' }}>
-            {session ? (
-              <FileTree
-                files={session.files}
-                commentCounts={countThreadsByFile(session.threads)}
-                onSelect={(path) =>
-                  document.getElementById(`file-${path}`)?.scrollIntoView({ behavior: 'smooth' })
-                }
+        <aside className={styles.sidebar}>
+          {session ? (
+            <FileTree
+              files={session.files}
+              commentCounts={countThreadsByFile(session.threads)}
+              onSelect={(path) =>
+                document.getElementById(`file-${path}`)?.scrollIntoView({ behavior: 'smooth' })
+              }
+            />
+          ) : null}
+        </aside>
+
+        <main className={styles.content}>
+          {error ? <Alert type="error" message={error} showIcon /> : null}
+          {!session && !error ? <Spin /> : null}
+
+          {session ? (
+            <>
+              <SummaryPanel
+                summary={session.summary}
+                threadCount={session.threads.filter((t) => t.status === 'open').length}
               />
-            ) : null}
-          </Layout.Sider>
-
-          <Layout.Content style={{ padding: 16 }}>
-            {error ? <Alert type="error" message={error} showIcon /> : null}
-            {!session && !error ? <Spin /> : null}
-
-            {session ? (
-              <>
-                <SummaryPanel
-                  summary={session.summary}
-                  threadCount={session.threads.filter((t) => t.status === 'open').length}
-                />
-                {session.files.map((file) => (
-                  <div id={`file-${file.path}`} key={file.path}>
-                    <FileSection
+              {session.files.map((file) => (
+                <div id={`file-${file.path}`} key={file.path}>
+                  <FileSection
+                    file={file}
+                    viewed={viewed[file.path] ?? false}
+                    onViewedChange={(value) => setViewed(file.path, value)}
+                  >
+                    <DiffPane
+                      api={api}
                       file={file}
-                      viewed={viewed[file.path] ?? false}
-                      onViewedChange={(value) => setViewed(file.path, value)}
-                    >
-                      <DiffPane
-                        api={api}
-                        file={file}
-                        mode={mode}
-                        enabled={!(viewed[file.path] ?? false)}
-                        threads={session.threads.filter((t) => t.file === file.path)}
-                      />
-                    </FileSection>
-                  </div>
-                ))}
-              </>
-            ) : null}
-          </Layout.Content>
-        </Layout>
-      </Layout>
+                      mode={mode}
+                      enabled={!(viewed[file.path] ?? false)}
+                      threads={session.threads.filter((t) => t.file === file.path)}
+                    />
+                  </FileSection>
+                </div>
+              ))}
+            </>
+          ) : null}
+        </main>
+      </div>
 
       <SubmitDrawer
         api={api}

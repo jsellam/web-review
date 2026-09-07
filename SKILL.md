@@ -1,6 +1,6 @@
 ---
 name: web-review
-description: Open a local GitHub-style review of the current changes in the browser, wait for the human's line-anchored comments, and act on them. Use after finishing a batch of edits, when the user asks to review changes, or before committing.
+description: Open a local GitHub-style review of the current changes in the browser, wait for the human's line-anchored comments, and act on them. Use after finishing a batch of edits, when the user asks to review changes, or before committing or pushing.
 ---
 
 # web-review

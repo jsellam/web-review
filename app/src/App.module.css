@@ -1,0 +1,99 @@
+/*
+ * The shell, minus antd's `Layout`. `ConfigProvider` stays: the drawer and the
+ * alerts are still antd and still need it for their own theming.
+ *
+ * `height`, not `min-height`: the grid is exactly the viewport, so the sidebar
+ * and the diff column each own a scrollbar instead of the page owning one. The
+ * file tree is the reason — it is as tall as the change and would otherwise
+ * push the page down rather than scroll inside its column. The header staying
+ * put is the other half of the same trade.
+ */
+.shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  grid-template-rows: 40px 1fr;
+  grid-template-areas:
+    "header header"
+    "sidebar content";
+  height: 100vh;
+}
+
+.header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-3);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.meta {
+  font-family: var(--font-mono);
+  font-size: var(--text-2);
+  color: var(--fg-subtle);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/*
+ * No segmented-control styles here: both switches in the header are
+ * <Segmented>, which carries its own stylesheet.
+ */
+
+.reviewGroup {
+  position: relative;
+  display: inline-flex;
+}
+
+.review {
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-2);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 500;
+  font-size: var(--text-2);
+}
+
+.review:hover {
+  background: var(--accent-hover);
+}
+
+.count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: var(--del-fg);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.sidebar {
+  grid-area: sidebar;
+  padding: var(--space-3) var(--space-2);
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  overflow: auto;
+}
+
+/* `min-width: 0` or a wide diff blows the grid column out past the viewport. */
+.content {
+  grid-area: content;
+  padding: var(--space-4);
+  min-width: 0;
+  overflow: auto;
+}
