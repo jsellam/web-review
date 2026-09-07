@@ -100,8 +100,9 @@ range: working tree vs HEAD (base 3f2a1c9)
 - File header: `== <path>  <status>  +<additions> -<deletions>`, and for a
   rename `== <newpath>  renamed from <oldpath>  +N -M`.
 - An untracked file has no `git diff` output and therefore no `@@` header. It
-  is rendered as a pure addition numbered from 1, header
-  `== <path>  added (untracked)  +N -0`.
+  is rendered as a pure addition numbered from 1, under the ordinary
+  `== <path>  added  +N -0` header. Nothing marks it as untracked: the
+  distinction changes nothing the agent does with it.
 
 To annotate, the agent reads a number off the column matching the `side` it
 wants: the `new` column for `side: "new"`, the `old` column for `side: "old"`.
@@ -118,7 +119,10 @@ more expensive than the greps it replaces.
 - **Binary** — header only:
   `== app/dist/assets/logo.png  modified  binary — not shown`
 - **Per file**, over 400 diff lines — header plus a note, no body:
-  `== app/dist/index.js  modified  +4200 -3800  — 8000 diff lines, truncated; read the file yourself if you need it`
+  `== app/dist/index.js  modified  +4200 -3800  — too large, truncated; read the file yourself if you need it`
+  Checked twice: against `additions + deletions` before the file is diffed at
+  all, and against the rendered line count afterwards, which context lines can
+  push over the bound on their own.
 - **Total**, over 2000 diff lines — every remaining file as a header plus
   `— omitted, output limit reached`
 
@@ -135,16 +139,20 @@ on the file it applies to.
 
 `src/server/git/diff.ts`
 
-- `readDiff(range, opts): Promise<string>` — the only side effect. Runs
-  `git diff -U3 -M` (or `--cached`) once for the whole range, without `-z`;
-  the existing `diffArgs` is `-z` for `--numstat`/`--name-status` and is not
-  reused.
-- `splitDiffByFile(raw): Map<string, string[]>` — pure. Splits on
-  `diff --git` boundaries, keys by new path, drops the `index`/`---`/`+++`/
-  `similarity` metadata lines.
-- `numberHunks(body): NumberedLine[]` — pure. Walks `@@ -a,b +c,d @@` and
-  assigns `{ old: number | null, new: number | null, marker, text }` to every
-  line.
+- `readFileDiff(entry, range, opts): Promise<string>` — the only side effect.
+  Runs `git diff -M -U3 <base> -- <path>` (both paths for a rename, so `-M`
+  can still see it) **per file**, not once for the range.
+- `numberHunks(text): NumberedLine[]` — pure. Skips everything before the
+  first `@@`, then walks `@@ -a,b +c,d @@` assigning
+  `{ kind, old: number | null, new: number | null, text }` to every line.
+  `kind` is `'hunk' | 'context' | 'add' | 'del'`.
+
+Diffing per file rather than splitting one combined diff is deliberate. It
+removes the need to parse the paths out of `diff --git a/… b/…` headers —
+where git quotes anything non-ASCII — and the authoritative path list already
+comes from `listChangedFiles`. It also means an oversized or binary file is
+never diffed at all: `additions + deletions` is known up front, so the bound
+is applied before the work, not after.
 
 `src/server/review/prepare.ts`
 
@@ -163,11 +171,11 @@ and are subject to the same bounds.
 
 Colocated, matching the repo's convention.
 
-`src/server/git/diff.test.ts` — `splitDiffByFile` over multi-file output,
-renames, deletions, additions, a path containing a space, and a body whose
-content contains a line starting with `diff --git`. `numberHunks` over
-multiple hunks, pure additions, pure deletions, a file with no trailing
-newline, and `\ No newline at end of file`.
+`src/server/git/diff.test.ts` — `numberHunks` over multiple hunks, a header
+with no line count, an empty context line, and `\ No newline at end of file`.
+`readFileDiff` against a real temp repository: one file in isolation, a rename
+still seen as a rename under a pathspec, an untracked file (empty diff), and a
+staged range reading the index rather than the working tree.
 
 `src/server/review/prepare.test.ts` — column alignment; the marker/`.` pairing
 for each of the three line kinds; the binary, per-file and total bounds each
