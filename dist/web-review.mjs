@@ -104,7 +104,7 @@ function diffArgs(range, extra) {
   return range.staged ? ["diff", "--cached", "-M", "-z", ...extra, range.base] : ["diff", "-M", "-z", ...extra, range.base];
 }
 function parseNumstat(output) {
-  const counts = /* @__PURE__ */ new Map();
+  const counts2 = /* @__PURE__ */ new Map();
   const fields = output.split(NUL);
   let i = 0;
   while (i < fields.length) {
@@ -125,7 +125,7 @@ function parseNumstat(output) {
     if (path === "") {
       const newPath = fields[i + 2] ?? "";
       if (newPath) {
-        counts.set(newPath, {
+        counts2.set(newPath, {
           additions: added === "-" ? 0 : Number(added),
           deletions: deleted === "-" ? 0 : Number(deleted),
           binary: added === "-" && deleted === "-"
@@ -133,7 +133,7 @@ function parseNumstat(output) {
       }
       i += 3;
     } else {
-      counts.set(path, {
+      counts2.set(path, {
         additions: added === "-" ? 0 : Number(added),
         deletions: deleted === "-" ? 0 : Number(deleted),
         binary: added === "-" && deleted === "-"
@@ -141,7 +141,7 @@ function parseNumstat(output) {
       i += 1;
     }
   }
-  return counts;
+  return counts2;
 }
 var STATUS_MAP = {
   A: "added",
@@ -155,7 +155,7 @@ async function listChangedFiles(range, opts) {
     git(diffArgs(range, ["--numstat"]), opts),
     git(diffArgs(range, ["--name-status"]), opts)
   ]);
-  const counts = parseNumstat(numstat);
+  const counts2 = parseNumstat(numstat);
   const entries = [];
   const records = nameStatus.split(NUL).filter((r) => r.length > 0);
   let i = 0;
@@ -170,7 +170,7 @@ async function listChangedFiles(range, opts) {
         path,
         oldPath,
         status,
-        ...counts.get(path) ?? { additions: 0, deletions: 0, binary: false }
+        ...counts2.get(path) ?? { additions: 0, deletions: 0, binary: false }
       });
       i += 3;
     } else {
@@ -179,7 +179,7 @@ async function listChangedFiles(range, opts) {
         path,
         oldPath: status === "added" ? null : path,
         status,
-        ...counts.get(path) ?? { additions: 0, deletions: 0, binary: false }
+        ...counts2.get(path) ?? { additions: 0, deletions: 0, binary: false }
       });
       i += 2;
     }
@@ -247,6 +247,163 @@ async function readSide(path, side, range, opts) {
   ]);
   if (real === null || real !== realRoot && !real.startsWith(realRoot + sep)) return null;
   return readFile(full, "utf8");
+}
+
+// src/server/git/diff.ts
+var HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+function numberHunks(text) {
+  const out = [];
+  let oldNo = 0;
+  let newNo = 0;
+  let inHunk = false;
+  for (const raw of text.split("\n")) {
+    const hunk = HUNK.exec(raw);
+    if (hunk) {
+      oldNo = Number(hunk[1]);
+      newNo = Number(hunk[2]);
+      inHunk = true;
+      out.push({ kind: "hunk", old: null, new: null, text: raw });
+      continue;
+    }
+    if (!inHunk) continue;
+    if (raw === "") continue;
+    if (raw.startsWith("\\")) continue;
+    const marker2 = raw.charAt(0);
+    const body = raw.slice(1);
+    if (marker2 === "+") {
+      out.push({ kind: "add", old: null, new: newNo, text: body });
+      newNo += 1;
+    } else if (marker2 === "-") {
+      out.push({ kind: "del", old: oldNo, new: null, text: body });
+      oldNo += 1;
+    } else {
+      out.push({ kind: "context", old: oldNo, new: newNo, text: body });
+      oldNo += 1;
+      newNo += 1;
+    }
+  }
+  return out;
+}
+async function readFileDiff(entry, range, opts) {
+  const paths = entry.status === "renamed" && entry.oldPath ? [entry.oldPath, entry.path] : [entry.path];
+  const args = range.staged ? ["diff", "--cached", "-M", "-U3", range.base, "--", ...paths] : ["diff", "-M", "-U3", range.base, "--", ...paths];
+  return gitRaw(args, opts);
+}
+
+// src/server/review/anchor.ts
+import { createHash } from "node:crypto";
+var SEARCH_WINDOW = 25;
+function splitLines(content) {
+  if (content.length === 0) return [];
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+function contextHash(lines, index) {
+  const window = [lines[index - 1] ?? "", lines[index] ?? "", lines[index + 1] ?? ""];
+  const normalised = window.map((line) => line.trim()).join("\n");
+  return createHash("sha1").update(normalised).digest("hex").slice(0, 12);
+}
+function makeAnchor(lines, line) {
+  const content = lines[line - 1];
+  if (content === void 0) {
+    throw new Error(`web-review: line ${line} is out of range (${lines.length} lines)`);
+  }
+  return { line, content, contextHash: contextHash(lines, line - 1) };
+}
+function relocate(anchor, lines) {
+  if (lines[anchor.line - 1] === anchor.content) {
+    return { line: anchor.line, status: "unchanged" };
+  }
+  const matches = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i] === anchor.content) matches.push(i + 1);
+  }
+  if (matches.length === 0) return { line: null, status: "outdated" };
+  const near = nearest(matches, anchor.line, SEARCH_WINDOW);
+  if (near !== null) return { line: near, status: "moved" };
+  if (matches.length === 1) return { line: matches[0], status: "moved" };
+  const byContext = matches.filter((line) => contextHash(lines, line - 1) === anchor.contextHash);
+  if (byContext.length === 1) return { line: byContext[0], status: "moved" };
+  return { line: null, status: "outdated" };
+}
+function nearest(candidates, target, window) {
+  let best = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const distance = Math.abs(candidate - target);
+    if (distance <= window && distance <= bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+// src/server/review/prepare.ts
+var PER_FILE_LIMIT = 400;
+var TOTAL_LIMIT = 2e3;
+var COLUMN = 5;
+function isTooLarge(entry) {
+  return entry.additions + entry.deletions > PER_FILE_LIMIT;
+}
+function wholeFileAsAdditions(content) {
+  return splitLines(content).map((text, index) => ({
+    kind: "add",
+    old: null,
+    new: index + 1,
+    text
+  }));
+}
+function column(value) {
+  return String(value ?? ".").padStart(COLUMN);
+}
+function marker(kind) {
+  return kind === "add" ? "+" : kind === "del" ? "-" : " ";
+}
+function renderLine(line) {
+  if (line.kind === "hunk") return line.text;
+  return `${column(line.old)}${column(line.new)}  ${marker(line.kind)} ${line.text}`;
+}
+function counts(entry) {
+  return `+${entry.additions} -${entry.deletions}`;
+}
+function statusLabel(entry) {
+  return entry.status === "renamed" && entry.oldPath ? `renamed from ${entry.oldPath}` : entry.status;
+}
+function header(entry, note = "") {
+  const body = entry.binary ? "binary \u2014 not shown" : counts(entry);
+  return `== ${entry.path}  ${statusLabel(entry)}  ${body}${note}`;
+}
+var SHA = /^[0-9a-f]{40}$/;
+function renderPrepare(range, files) {
+  const base = SHA.test(range.base) ? range.base.slice(0, 7) : range.base;
+  const noun = files.length === 1 ? "file" : "files";
+  const out = [
+    `range: ${range.label} (base ${base})`,
+    `${files.length} ${noun} changed`,
+    "",
+    `${"old".padStart(COLUMN)}${"new".padStart(COLUMN)}`
+  ];
+  let used = 0;
+  for (const { entry, lines } of files) {
+    if (lines === null) {
+      out.push(header(entry, entry.binary ? "" : "  \u2014 too large, truncated; read the file yourself if you need it"));
+      continue;
+    }
+    if (lines.length > PER_FILE_LIMIT) {
+      out.push(header(entry, "  \u2014 too large, truncated; read the file yourself if you need it"));
+      continue;
+    }
+    if (used + lines.length > TOTAL_LIMIT) {
+      out.push(header(entry, "  \u2014 omitted, output limit reached"));
+      continue;
+    }
+    out.push(header(entry), ...lines.map(renderLine));
+    used += lines.length;
+  }
+  return `${out.join("\n")}
+`;
 }
 
 // src/server/review/request.ts
@@ -356,56 +513,6 @@ function validateSubmit(raw) {
     resolved: asIdList(raw["resolved"], "resolved"),
     reopened: asIdList(raw["reopened"], "reopened")
   };
-}
-
-// src/server/review/anchor.ts
-import { createHash } from "node:crypto";
-var SEARCH_WINDOW = 25;
-function splitLines(content) {
-  if (content.length === 0) return [];
-  const lines = content.split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  return lines;
-}
-function contextHash(lines, index) {
-  const window = [lines[index - 1] ?? "", lines[index] ?? "", lines[index + 1] ?? ""];
-  const normalised = window.map((line) => line.trim()).join("\n");
-  return createHash("sha1").update(normalised).digest("hex").slice(0, 12);
-}
-function makeAnchor(lines, line) {
-  const content = lines[line - 1];
-  if (content === void 0) {
-    throw new Error(`web-review: line ${line} is out of range (${lines.length} lines)`);
-  }
-  return { line, content, contextHash: contextHash(lines, line - 1) };
-}
-function relocate(anchor, lines) {
-  if (lines[anchor.line - 1] === anchor.content) {
-    return { line: anchor.line, status: "unchanged" };
-  }
-  const matches = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    if (lines[i] === anchor.content) matches.push(i + 1);
-  }
-  if (matches.length === 0) return { line: null, status: "outdated" };
-  const near = nearest(matches, anchor.line, SEARCH_WINDOW);
-  if (near !== null) return { line: near, status: "moved" };
-  if (matches.length === 1) return { line: matches[0], status: "moved" };
-  const byContext = matches.filter((line) => contextHash(lines, line - 1) === anchor.contextHash);
-  if (byContext.length === 1) return { line: byContext[0], status: "moved" };
-  return { line: null, status: "outdated" };
-}
-function nearest(candidates, target, window) {
-  let best = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const candidate of candidates) {
-    const distance = Math.abs(candidate - target);
-    if (distance <= window && distance <= bestDistance) {
-      best = candidate;
-      bestDistance = distance;
-    }
-  }
-  return best;
 }
 
 // src/server/review/state.ts
@@ -621,8 +728,8 @@ async function handleApi(req, res, deps) {
     sendJson(res, 403, { error: "forbidden host" });
     return true;
   }
-  const header = req.headers[TOKEN_HEADER];
-  const provided = Array.isArray(header) ? header[0] : header;
+  const header2 = req.headers[TOKEN_HEADER];
+  const provided = Array.isArray(header2) ? header2[0] : header2;
   if (!isTokenValid(provided, deps.token)) {
     sendJson(res, 401, { error: "invalid token" });
     return true;
@@ -863,7 +970,8 @@ function parseArgs(argv) {
     port: 0,
     open: true,
     stop: false,
-    serveInternal: false
+    serveInternal: false,
+    prepare: false
   };
   const number = (raw, flag) => {
     const value = Number(raw);
@@ -879,6 +987,7 @@ function parseArgs(argv) {
     else if (arg === "--no-open") options.open = false;
     else if (arg === "--stop") options.stop = true;
     else if (arg === "--__serve") options.serveInternal = true;
+    else if (arg === "--prepare") options.prepare = true;
     else if (arg.startsWith("-")) throw new Error(`web-review: unknown option: ${arg}`);
     else options.base = arg;
   }
@@ -895,6 +1004,13 @@ function linesLookup(range, cwd, files = []) {
 function emit(result, code = 0) {
   process.stdout.write(`${frameResult(result)}
 `, () => process.exit(code));
+}
+function emitText(text, code = 0, stream = process.stdout) {
+  stream.write(text, () => process.exit(code));
+}
+function prefixed(error) {
+  const message2 = error instanceof Error ? error.message : "unexpected error";
+  return message2.startsWith("web-review: ") ? message2 : `web-review: ${message2}`;
 }
 function openBrowser(url) {
   const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -1010,12 +1126,58 @@ async function discardRequest(stateDir) {
     throw error;
   }
 }
+async function prepareMain(root, options) {
+  const range = await resolveRange(options.base, { cwd: root });
+  const files = await listChangedFiles(range, { cwd: root });
+  if (files.length === 0) {
+    emitText("no changes\n");
+    return;
+  }
+  const prepared = [];
+  for (const entry of files) {
+    if (entry.binary || isTooLarge(entry)) {
+      prepared.push({ entry, lines: null });
+      continue;
+    }
+    const lines = numberHunks(await readFileDiff(entry, range, { cwd: root }));
+    if (lines.length === 0 && entry.status === "added") {
+      const content = await readSide(entry.path, "new", range, { cwd: root });
+      prepared.push({ entry, lines: wholeFileAsAdditions(content ?? "") });
+      continue;
+    }
+    prepared.push({ entry, lines });
+  }
+  emitText(renderPrepare(range, prepared));
+}
 async function main() {
-  const options = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const wantsPrepare = argv.includes("--prepare");
+  let options;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    if (!wantsPrepare) throw error;
+    emitText(`${prefixed(error)}
+`, 1, process.stderr);
+    return;
+  }
   const cwd = process.cwd();
   const root = await repoRoot({ cwd }).catch(() => null);
   if (root === null) {
+    if (options.prepare) {
+      emitText("web-review: not a git repository\n", 1, process.stderr);
+      return;
+    }
     emit(errorResult("not a git repository"), 1);
+    return;
+  }
+  if (options.prepare) {
+    try {
+      await prepareMain(root, options);
+    } catch (error) {
+      emitText(`${prefixed(error)}
+`, 1, process.stderr);
+    }
     return;
   }
   const gitDir2 = await gitDir({ cwd: root });
