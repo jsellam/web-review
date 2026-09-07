@@ -583,6 +583,20 @@ describe('the CLI', () => {
     expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
   });
 
+  it('says so in plain text, never framed JSON, when an unknown flag is combined with --prepare', async () => {
+    const { stdout, stderr } = await prepare(['--wat']);
+
+    expect(stderr.trim()).toBe('web-review: unknown option: --wat');
+    expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
+  });
+
+  it('says so in plain text, never framed JSON, when --timeout is non-numeric under --prepare', async () => {
+    const { stdout, stderr } = await prepare(['--timeout', 'notanumber']);
+
+    expect(stderr.trim()).toBe('web-review: --timeout needs a number');
+    expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
+  });
+
   it('reports an empty range as plain text', async () => {
     const { stdout } = await prepare();
     expect(stdout.trim()).toBe('no changes');

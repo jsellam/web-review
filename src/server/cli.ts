@@ -385,7 +385,23 @@ async function prepareMain(root: string, options: CliOptions): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+  // `--prepare` promises plain text on every path, but parseArgs itself can
+  // throw — an unknown flag, a non-numeric --timeout — before there is an
+  // options object to consult. Look for the flag in the raw argv first, so a
+  // bad invocation of this mode cannot fall through to the framed result the
+  // top-level handler would otherwise print.
+  const argv = process.argv.slice(2);
+  const wantsPrepare = argv.includes('--prepare');
+
+  let options: CliOptions;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    if (!wantsPrepare) throw error;
+    emitText(`${prefixed(error)}\n`, 1, process.stderr);
+    return;
+  }
+
   const cwd = process.cwd();
 
   const root = await repoRoot({ cwd }).catch(() => null);
