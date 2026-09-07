@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { frameResult } from '../shared/protocol.js';
 import { gitDir as resolveGitDir, repoRoot } from './git/exec.js';
 import { resolveRange, type DiffRange } from './git/range.js';
 import { listChangedFiles, readSide, renameMap } from './git/files.js';
-import { readRequest, REQUEST_FILE } from './review/request.js';
+import { isENOENT, readRequest, REQUEST_FILE } from './review/request.js';
 import { splitLines } from './review/anchor.js';
 import {
   applySubmission,
@@ -141,11 +142,18 @@ function openBrowser(url: string): void {
 }
 
 /**
- * Directory this bundle lives in. `import.meta.dirname` would be simpler but
- * needs Node 20.11+; `fileURLToPath` on `import.meta.url` works down to
- * Node 18, matching the engine floor.
+ * This bundle's own path, and the directory holding it. `import.meta.filename`
+ * and `import.meta.dirname` would be simpler but need Node 20.11+;
+ * `fileURLToPath` on `import.meta.url` works down to Node 18, matching the
+ * engine floor.
+ *
+ * Deriving both from `import.meta.url` rather than from `process.argv[1]`
+ * matters: Node resolves a module URL through symlinks, so this stays the
+ * real file even when the process was addressed through a linked skill
+ * directory (`~/.claude/skills/web-review` -> `~/.agents/skills/web-review`).
  */
-const moduleDir = fileURLToPath(new URL('.', import.meta.url));
+const modulePath = fileURLToPath(import.meta.url);
+const moduleDir = dirname(modulePath);
 
 /** The detached half: serve until a review is submitted, then write the result and exit. */
 async function serveMain(cwd: string, stateDir: string): Promise<void> {
@@ -296,6 +304,21 @@ async function releaseSpawnLock(stateDir: string): Promise<void> {
   await rm(join(stateDir, LOCK_FILE), { force: true });
 }
 
+/**
+ * Delete request.json, reporting whether there was one to delete. `rm` with
+ * `force` cannot tell "removed" from "was never there", and the caller has to
+ * say which happened.
+ */
+async function discardRequest(stateDir: string): Promise<boolean> {
+  try {
+    await unlink(join(stateDir, REQUEST_FILE));
+    return true;
+  } catch (error) {
+    if (isENOENT(error)) return false;
+    throw error;
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
@@ -343,12 +366,41 @@ async function main(): Promise<void> {
 
   const existing = await readServerRecord(stateDir);
   if (existing && (await isServerAlive(existing))) {
+    // A round is already open, and its state already holds everything the
+    // agent wrote for it. `pending` tells the agent to run the command
+    // again, and rewriting request.json first is a natural way to do that —
+    // so a request.json sitting here describes the round already under
+    // review, not a new one. Leaving it on disk would bank it for the NEXT
+    // round, where every annotation in it reappears a second time beside the
+    // reviewer's fresh comments. Consume it here instead.
+    //
+    // The `unconsumed result` branch below deliberately does the opposite
+    // and keeps the file: no round is open there, so a request.json really
+    // is input still waiting for its turn.
+    const discarded = await discardRequest(stateDir);
+
     // A previous round's result.json, if any, was already removed by the
     // process that read it (or never existed). What we wait for here is
     // strictly a fresh write from the still-running server, so re-attachment
     // can never return a stale outcome.
     const result = await waitForResult(stateDir, options.timeoutSeconds);
-    emit(result ?? pendingResult(`http://127.0.0.1:${existing.port}/?t=${existing.token}`));
+    if (result) {
+      emit(result);
+      return;
+    }
+
+    // Say that the request was dropped rather than dropping it silently —
+    // the same principle `unanchored` follows for a comment that could not
+    // be placed.
+    const pending = pendingResult(`http://127.0.0.1:${existing.port}/?t=${existing.token}`);
+    emit(
+      discarded ?
+        {
+          ...pending,
+          message: `a review was already open, so ${REQUEST_FILE} described that round and was consumed rather than held for the next one. Re-run the command as-is; there is no need to write it again.`,
+        }
+      : pending,
+    );
     return;
   }
   await removeServerRecord(stateDir);
@@ -416,7 +468,11 @@ async function main(): Promise<void> {
   let serverRecord: Awaited<ReturnType<typeof readServerRecord>>;
   if (shouldSpawn) {
     try {
-      spawn(process.execPath, [process.argv[1]!, '--__serve'], {
+      // Spawn this module by its own resolved path, not by `process.argv[1]`:
+      // the child re-runs the entry-point check below, and handing it the
+      // path the parent happened to be addressed by makes that check depend
+      // on how the caller spelled it.
+      spawn(process.execPath, [modulePath, '--__serve'], {
         cwd: root,
         detached: true,
         stdio: 'ignore',
@@ -466,12 +522,31 @@ async function waitForRecord(stateDir: string) {
 
 /**
  * Only run when this module is the process entry point — i.e. it was invoked
- * as `node cli.js ...`, not imported by a test. `import.meta.url` for an
- * import always differs from `pathToFileURL(process.argv[1])`, so a test
- * importing this module for `parseArgs` never triggers `main()` or installs
- * the signal handlers below.
+ * as `node cli.js ...`, not imported by a test. A test importing this module
+ * for `parseArgs` runs under a different entry point, so it never triggers
+ * `main()` or installs the signal handlers below.
+ *
+ * Comparing `import.meta.url` against `pathToFileURL(process.argv[1])`
+ * directly would be wrong: Node resolves a module URL through symlinks but
+ * leaves `process.argv[1]` exactly as the caller spelled it. A skill
+ * directory is routinely a symlink, and the two then never match — `main()`
+ * never runs, and the process exits 0 having printed nothing at all, which
+ * an agent reads as a silent success. Compare real paths instead, on both
+ * sides, so the check also holds under `--preserve-symlinks-main` (which
+ * leaves `import.meta.url` symlinked rather than the other way round).
  */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isEntryPoint(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(modulePath);
+  } catch {
+    // `argv[1]` names nothing we can resolve on disk, so it is not this file.
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   /**
    * A cancelled review must never reach the agent as silence, which it could
    * mistake for approval. Print an explicit `aborted` and leave the detached

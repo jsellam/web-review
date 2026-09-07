@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createRepo, type TestRepo } from './test-helpers/repo.js';
@@ -426,4 +426,107 @@ describe('the CLI', () => {
       await rm(binDir, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it('runs when invoked through a symlinked path, as a linked skill directory is', async () => {
+    // A skill directory is routinely a symlink (~/.claude/skills/web-review ->
+    // ~/.agents/skills/web-review). Node resolves import.meta.url to the
+    // realpath but leaves process.argv[1] symlinked, so an entry-point guard
+    // comparing the two never fires and the process exits 0 having done
+    // nothing at all: no server, no browser, no framed result. The detached
+    // half is spawned with the same argv[1], so it must survive this too.
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const linkParent = await mkdtemp(join(tmpdir(), 'web-review-link-'));
+    const link = join(linkParent, 'dist');
+    await symlink(dirname(CLI), link);
+
+    try {
+      const { stdout } = await run(
+        process.execPath,
+        [join(link, 'web-review.mjs'), '--no-open', '--timeout', '2'],
+        { cwd: repo.dir },
+      ).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }));
+
+      expect(parseFramed(stdout).status).toBe('pending');
+    } finally {
+      await rm(linkParent, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('reviews from inside a git worktree, where .git is a file, not a directory', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'web-review-wt-'));
+    const worktree = join(parent, 'feature');
+    await repo.run('worktree', 'add', '-b', 'feature', worktree);
+    await writeFile(
+      join(worktree, 'src/auth.ts'),
+      'export function sign() {\n  return 2;\n}\n',
+      'utf8',
+    );
+
+    try {
+      const { stdout } = await run(process.execPath, [CLI, '--no-open', '--timeout', '2'], {
+        cwd: worktree,
+      }).catch((error: { stdout?: string }) => ({ stdout: error.stdout ?? '' }));
+
+      expect(parseFramed(stdout).status).toBe('pending');
+
+      // State belongs to the worktree's own git dir — .git/worktrees/feature
+      // in the main checkout — never to a `.git` directory under the
+      // worktree root, which does not exist, and never to the main
+      // checkout's own state, which belongs to a different set of changes.
+      const { stdout: gitDir } = await run('git', ['rev-parse', '--absolute-git-dir'], {
+        cwd: worktree,
+      });
+      const stateDir = join(gitDir.trim(), 'web-review');
+      const state = JSON.parse(await readFile(join(stateDir, 'state.json'), 'utf8')) as {
+        round: number;
+      };
+      expect(state.round).toBe(1);
+      await expect(readFile(join(repo.dir, '.git', 'web-review', 'state.json'), 'utf8')).rejects.toThrow();
+    } finally {
+      await run(process.execPath, [CLI, '--stop'], { cwd: worktree }).catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('does not bank a request.json written before a re-attach into the next round', async () => {
+    // The agent is told to run the command again when it gets `pending`, and
+    // it may well rewrite request.json before doing so. That re-run only
+    // re-attaches to the round already open — which already contains those
+    // annotations — so a request.json left on disk is not "unconsumed input"
+    // waiting for its turn: it is a duplicate of the current round, and
+    // folding it into the next one makes every agent annotation appear a
+    // second time next to the reviewer's fresh comments.
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+    const stateDir = join(repo.dir, '.git', 'web-review');
+    const request = join(stateDir, 'request.json');
+    const body = JSON.stringify({
+      summary: 'Change the return value.',
+      annotations: [{ file: 'src/auth.ts', line: 2, side: 'new', body: 'why 2?' }],
+    });
+
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(request, body, 'utf8');
+    expect((await cli(['--no-open', '--timeout', '2'])).status).toBe('pending');
+
+    // Round 1 is open and holds the annotation. The agent re-runs, rewriting
+    // the same request.json as it goes.
+    await writeFile(request, body, 'utf8');
+    const reattached = await cli(['--no-open', '--timeout', '2']);
+    expect(reattached.status).toBe('pending');
+    await expect(readFile(request, 'utf8')).rejects.toThrow();
+
+    // Open the next round with nothing new to say, and the annotation must
+    // still be there exactly once.
+    await cli(['--stop']);
+    expect((await cli(['--no-open', '--timeout', '2'])).status).toBe('pending');
+
+    const state = JSON.parse(await readFile(join(stateDir, 'state.json'), 'utf8')) as {
+      round: number;
+      threads: { messages: { body: string }[] }[];
+    };
+    expect(state.round).toBe(2);
+    const said = state.threads.flatMap((t) => t.messages).filter((m) => m.body === 'why 2?');
+    expect(said).toHaveLength(1);
+  }, 30_000);
 });
