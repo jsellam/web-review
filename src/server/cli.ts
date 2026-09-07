@@ -7,6 +7,13 @@ import { frameResult } from '../shared/protocol.js';
 import { gitDir as resolveGitDir, repoRoot } from './git/exec.js';
 import { resolveRange, type DiffRange } from './git/range.js';
 import { listChangedFiles, readSide, renameMap } from './git/files.js';
+import { numberHunks, readFileDiff } from './git/diff.js';
+import {
+  isTooLarge,
+  renderPrepare,
+  wholeFileAsAdditions,
+  type PreparedFile,
+} from './review/prepare.js';
 import { isENOENT, readRequest, REQUEST_FILE } from './review/request.js';
 import { splitLines } from './review/anchor.js';
 import {
@@ -43,6 +50,7 @@ export interface CliOptions {
   open: boolean;
   stop: boolean;
   serveInternal: boolean;
+  prepare: boolean;
 }
 
 export function parseArgs(argv: string[]): CliOptions {
@@ -53,6 +61,7 @@ export function parseArgs(argv: string[]): CliOptions {
     open: true,
     stop: false,
     serveInternal: false,
+    prepare: false,
   };
 
   const number = (raw: string | undefined, flag: string): number => {
@@ -70,6 +79,7 @@ export function parseArgs(argv: string[]): CliOptions {
     else if (arg === '--no-open') options.open = false;
     else if (arg === '--stop') options.stop = true;
     else if (arg === '--__serve') options.serveInternal = true;
+    else if (arg === '--prepare') options.prepare = true;
     else if (arg.startsWith('-')) throw new Error(`web-review: unknown option: ${arg}`);
     else options.base = arg;
   }
@@ -118,6 +128,11 @@ function linesLookup(range: DiffRange, cwd: string, files: FileEntry[] = []): Li
  */
 function emit(result: CliResult, code = 0): void {
   process.stdout.write(`${frameResult(result)}\n`, () => process.exit(code));
+}
+
+/** `emit`'s plain-text twin, for `--prepare`, which produces no `CliResult` to frame. */
+function emitText(text: string, code = 0, stream: NodeJS.WriteStream = process.stdout): void {
+  stream.write(text, () => process.exit(code));
 }
 
 function openBrowser(url: string): void {
@@ -319,13 +334,72 @@ async function discardRequest(stateDir: string): Promise<boolean> {
   }
 }
 
+/**
+ * `--prepare`: print the range and a line-numbered diff, and nothing else.
+ *
+ * Strictly read-only. It never reads or consumes request.json, never touches
+ * state.json, never takes the spawn lock and never starts a server, so it is
+ * safe to run at any point — including while a round is open.
+ */
+async function prepareMain(root: string, options: CliOptions): Promise<void> {
+  const range = await resolveRange(options.base, { cwd: root });
+  const files = await listChangedFiles(range, { cwd: root });
+  if (files.length === 0) {
+    emitText('no changes\n');
+    return;
+  }
+
+  const prepared: PreparedFile[] = [];
+  for (const entry of files) {
+    if (entry.binary || isTooLarge(entry)) {
+      prepared.push({ entry, lines: null });
+      continue;
+    }
+
+    const lines = numberHunks(await readFileDiff(entry, range, { cwd: root }));
+
+    // `git diff` never lists an untracked file, so an added file with no
+    // hunks is one git has never seen. Read it off disk instead; an added
+    // file that really is empty renders as nothing either way.
+    if (lines.length === 0 && entry.status === 'added') {
+      const content = await readSide(entry.path, 'new', range, { cwd: root });
+      prepared.push({ entry, lines: wholeFileAsAdditions(content ?? '') });
+      continue;
+    }
+
+    prepared.push({ entry, lines });
+  }
+
+  emitText(renderPrepare(range, prepared));
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const cwd = process.cwd();
 
   const root = await repoRoot({ cwd }).catch(() => null);
   if (root === null) {
+    if (options.prepare) {
+      emitText('web-review: not a git repository\n', 1, process.stderr);
+      return;
+    }
     emit(errorResult('not a git repository'), 1);
+    return;
+  }
+
+  if (options.prepare) {
+    // Plain text end to end, including failures: this mode never emits a
+    // framed CliResult, so an agent parsing it must not have to handle two
+    // output shapes from one command.
+    try {
+      await prepareMain(root, options);
+    } catch (error) {
+      emitText(
+        `web-review: ${error instanceof Error ? error.message : 'unexpected error'}\n`,
+        1,
+        process.stderr,
+      );
+    }
     return;
   }
 

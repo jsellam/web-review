@@ -8,6 +8,7 @@ const defaults = {
   open: true,
   stop: false,
   serveInternal: false,
+  prepare: false,
 };
 
 describe('parseArgs', () => {
@@ -46,5 +47,17 @@ describe('parseArgs', () => {
 
   it('rejects an unknown flag', () => {
     expect(() => parseArgs(['--wat'])).toThrow(/unknown option: --wat/);
+  });
+
+  it('recognises --prepare', () => {
+    expect(parseArgs(['--prepare'])).toEqual({ ...defaults, prepare: true });
+  });
+
+  it('combines --prepare with a base', () => {
+    expect(parseArgs(['--prepare', '--staged'])).toEqual({
+      ...defaults,
+      prepare: true,
+      base: 'staged',
+    });
   });
 });
