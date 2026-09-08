@@ -1,15 +1,29 @@
-import type { DataNode } from 'antd/es/tree';
-import type { FileEntry, Thread } from '../../../../src/shared/types.js';
+import type { FileEntry, FileStatus, Thread } from '../../../../src/shared/types.js';
+
+/**
+ * One row of the sidebar tree. Deliberately not antd's `DataNode`: this module
+ * stays pure and free of JSX, and `FileTree` turns these into nodes with a
+ * rendered title. `status` is null for a directory, which has none.
+ */
+export interface FileTreeNode {
+  key: string;
+  name: string;
+  isLeaf: boolean;
+  status: FileStatus | null;
+  count: number;
+  children: FileTreeNode[];
+}
 
 interface MutableNode {
   key: string;
-  title: string;
+  name: string;
   isLeaf: boolean;
+  status: FileStatus | null;
   children: Map<string, MutableNode>;
 }
 
-function emptyNode(key: string, title: string, isLeaf: boolean): MutableNode {
-  return { key, title, isLeaf, children: new Map() };
+function emptyNode(key: string, name: string, isLeaf: boolean): MutableNode {
+  return { key, name, isLeaf, status: null, children: new Map() };
 }
 
 /** Open threads only: resolved and outdated ones do not need the reviewer's attention. */
@@ -25,7 +39,7 @@ export function countThreadsByFile(threads: Thread[]): Record<string, number> {
 export function buildFileTree(
   files: FileEntry[],
   commentCounts: Record<string, number>,
-): DataNode[] {
+): FileTreeNode[] {
   const root = emptyNode('', '', false);
 
   for (const file of files) {
@@ -37,30 +51,30 @@ export function buildFileTree(
       prefix = prefix ? `${prefix}/${segment}` : segment;
       const isLeaf = index === segments.length - 1;
       const existing = node.children.get(prefix) ?? emptyNode(prefix, segment, isLeaf);
+      if (isLeaf) existing.status = file.status;
       node.children.set(prefix, existing);
       node = existing;
     });
   }
 
-  return toDataNodes(root, commentCounts);
+  return freeze(root, commentCounts);
 }
 
-function toDataNodes(node: MutableNode, counts: Record<string, number>): DataNode[] {
+function freeze(node: MutableNode, counts: Record<string, number>): FileTreeNode[] {
   const children = [...node.children.values()].sort(compare);
 
-  return children.map((child) => {
-    const count = counts[child.key] ?? 0;
-    return {
-      key: child.key,
-      title: count > 0 ? `${child.title} (${count})` : child.title,
-      isLeaf: child.isLeaf,
-      ...(child.isLeaf ? {} : { children: toDataNodes(child, counts) }),
-    } satisfies DataNode;
-  });
+  return children.map((child) => ({
+    key: child.key,
+    name: child.name,
+    isLeaf: child.isLeaf,
+    status: child.status,
+    count: counts[child.key] ?? 0,
+    children: child.isLeaf ? [] : freeze(child, counts),
+  }));
 }
 
 /** Directories first, then files, each group alphabetical — the GitHub ordering. */
 function compare(a: MutableNode, b: MutableNode): number {
   if (a.isLeaf !== b.isLeaf) return a.isLeaf ? 1 : -1;
-  return a.title.localeCompare(b.title);
+  return a.name.localeCompare(b.name);
 }

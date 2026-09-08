@@ -58,6 +58,17 @@ export interface Reply {
   body: string;
 }
 
+/**
+ * One message inside a thread, addressed by its position in `Thread.messages`.
+ * Messages carry no id of their own, and adding one would rewrite every state
+ * file on disk; an index is enough because a submission is always applied to
+ * the very state that produced it, and replies only ever append.
+ */
+export interface MessageRef {
+  threadId: string;
+  index: number;
+}
+
 /** `.git/web-review/request.json`, written by the agent. All fields optional on disk. */
 export interface ReviewRequest {
   summary: string;
@@ -93,6 +104,11 @@ export interface SubmitPayload {
   replies: Reply[];
   resolved: string[];
   reopened: string[];
+  /**
+   * Messages the reviewer deleted, agent-written ones included. A thread left
+   * with no messages at all is dropped from the review entirely.
+   */
+  deletions: MessageRef[];
 }
 
 export interface CliResult {

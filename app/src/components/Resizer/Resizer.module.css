@@ -1,0 +1,31 @@
+/*
+ * A 5px-wide column of its own in the shell grid, so dragging it moves the
+ * boundary without either neighbour needing to overlap the other. The visible
+ * line is a ::after inset inside that hit area: 1px to look at, 5px to grab.
+ */
+.handle {
+  grid-area: resizer;
+  position: relative;
+  cursor: col-resize;
+  background: var(--bg-raised);
+  touch-action: none;
+}
+
+.handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--border);
+  transition: background 120ms ease;
+}
+
+.handle:hover::after,
+.handle:focus-visible::after,
+.handle[data-dragging="true"]::after {
+  inset: 0 1px;
+  background: var(--accent);
+}
+
+.handle:focus-visible {
+  outline: none;
+}
