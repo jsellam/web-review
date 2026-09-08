@@ -39,6 +39,7 @@ import { useResolvedTheme } from '../../theme.js';
 import { buildExtendData } from './extendData.js';
 import { CommentThread } from '../CommentThread/CommentThread.js';
 import { CommentComposer } from '../CommentComposer/CommentComposer.js';
+import { DraftComment } from '../DraftComment/DraftComment.js';
 import { OutdatedThreads } from '../CommentThread/OutdatedThreads.js';
 import { draftKey, useDraftStore } from '../../state/draft.js';
 import type { ReviewApi } from '../../api/client.js';
@@ -69,7 +70,6 @@ export function DiffPane({ api, file, mode, enabled, threads }: Props) {
   const { old: older, next: newer, loading, error } = useFileContents(api, file, enabled);
   const drafts = useDraftStore((state) => state.comments);
   const setComment = useDraftStore((state) => state.setComment);
-  const removeComment = useDraftStore((state) => state.removeComment);
 
   const positioned = useMemo(() => threads.filter((thread) => thread.status !== 'outdated'), [threads]);
   const outdated = useMemo(() => threads.filter((thread) => thread.status === 'outdated'), [threads]);
@@ -127,12 +127,15 @@ export function DiffPane({ api, file, mode, enabled, threads }: Props) {
               {data.threads.map((thread) => (
                 <CommentThread key={thread.id} thread={thread} />
               ))}
+              {/*
+                Keyed by its line so React keeps each card's own edit state
+                with the line it belongs to, rather than by position in a list
+                the library rebuilds.
+              */}
               {data.draft ? (
-                <CommentComposer
-                  initialValue={data.draft.body}
-                  submitLabel="Update comment"
-                  onSubmit={(body) => setComment(file.path, data.draft!.side, data.draft!.line, body)}
-                  onCancel={() => removeComment(draftKey(file.path, data.draft!.side, data.draft!.line))}
+                <DraftComment
+                  key={draftKey(file.path, data.draft.side, data.draft.line)}
+                  draft={data.draft}
                 />
               ) : null}
             </div>
