@@ -23,19 +23,6 @@ function title(node: FileTreeNode) {
 
   return (
     <span className={styles.row}>
-      {node.status ? (
-        <span
-          className={`${styles.badge} ${tone}`}
-          title={node.status}
-          aria-label={node.status}
-          role="img"
-        >
-          {LETTER[node.status]}
-        </span>
-      ) : (
-        <span className={styles.spacer} aria-hidden="true" />
-      )}
-
       {/* `title` so the full path is still readable once the name ellipsizes. */}
       <span className={`${styles.name} ${tone ?? ''}`} title={node.key}>
         {node.name}
@@ -47,6 +34,23 @@ function title(node: FileTreeNode) {
           title={`${node.count} open comment${node.count === 1 ? '' : 's'}`}
         >
           {node.count}
+        </span>
+      ) : null}
+
+      {/*
+        Last, at the right edge, which is where VS Code puts it — and the only
+        place it costs nothing. On the left it needed a column of its own, kept
+        empty on every directory so names stayed aligned, and that empty column
+        was most of the gap between a folder's expander and its name.
+      */}
+      {node.status ? (
+        <span
+          className={`${styles.badge} ${tone}`}
+          title={node.status}
+          aria-label={node.status}
+          role="img"
+        >
+          {LETTER[node.status]}
         </span>
       ) : null}
     </span>

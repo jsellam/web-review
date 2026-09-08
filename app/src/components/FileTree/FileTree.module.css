@@ -25,12 +25,6 @@
   text-transform: uppercase;
 }
 
-/* A directory keeps the badge column so every name in the tree starts flush. */
-.spacer {
-  flex: none;
-  width: 15px;
-}
-
 .name {
   flex: 1;
   min-width: 0;
@@ -72,8 +66,33 @@
  * to shrink, so the chain — treenode, content wrapper, title — is pinned to the
  * available width here. `:global` because these are antd's own class names.
  */
+/*
+ * antd paints the tree with its own `colorBgContainer`, which is close to the
+ * sidebar's `--bg-raised` but not equal to it — so the tree showed as a faintly
+ * lighter block that stopped wherever the last file was. The sidebar owns the
+ * background here; the tree sits on it.
+ */
+.tree {
+  background: transparent;
+}
+
 .tree :global(.ant-tree-treenode) {
   width: 100%;
+}
+
+/*
+ * antd indents 24px per level and gives the expander another 24px. On a path
+ * like `app/src/components/DiffPane/` that is most of a 280px sidebar spent on
+ * whitespace, leaving the file names to ellipsize. Half the indent and a
+ * tighter expander buy back roughly a level and a half of depth; the expander
+ * keeps its own column so files still line up under the folders they are in.
+ */
+.tree :global(.ant-tree-indent-unit) {
+  width: 12px;
+}
+
+.tree :global(.ant-tree-switcher) {
+  width: 16px;
 }
 
 .tree :global(.ant-tree-node-content-wrapper) {

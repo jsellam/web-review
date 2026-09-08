@@ -53,10 +53,17 @@ describe('App', () => {
     expect(await screen.findByTitle('1 open comment')).toHaveTextContent('1');
   });
 
-  it('badges each file in the tree with its status', async () => {
+  it('badges each file in the tree with its status, and nothing else', async () => {
     render(<App api={api} />);
 
     expect(await screen.findByRole('img', { name: 'modified' })).toHaveTextContent('m');
+    // One badge in the whole tree, on the one file. The directory above it gets
+    // none — not even an invisible placeholder, which is what used to hold a
+    // folder's name away from its expander. Matched on the status names rather
+    // than on role alone, because antd's own icons (the expander caret, the
+    // alert) are role="img" too.
+    expect(screen.getAllByRole('img', { name: /^(added|modified|deleted|renamed)$/ }))
+      .toHaveLength(1);
   });
 
   it('surfaces a session failure instead of spinning forever', async () => {
