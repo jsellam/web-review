@@ -35,23 +35,49 @@ after a batch of edits, and before it commits or pushes. If it forgets, ask:
 
 > review your changes
 
-Your browser opens on the diff. From there it is GitHub, with the parts that
-matter: file tree, split or unified, syntax highlighting, *Viewed* checkboxes,
-and comments you attach to a line by clicking it. When you're done, **Review**
-lets you approve, request changes, or just leave notes.
+It writes a short summary of what it did, opens the page in your browser, and
+prints the address it opened along with a line saying it is waiting for your
+review:
+
+```
+Review open: http://127.0.0.1:53411/?t=8f2c…
+I opened it in your browser; if nothing came up, use the link above.
+Waiting for you to submit the review before I continue.
+```
+
+So if the browser didn't open — a remote session, a container, no desktop —
+the link is right there in the transcript. It stays valid until you submit;
+the token in it is what lets the page through.
+
+From there it is GitHub, with the parts that matter: file tree, split or
+unified, syntax highlighting, *Viewed* checkboxes, and comments you attach to a
+line by clicking it. When you're done, **Review** lets you approve, request
+changes, or just leave notes.
 
 The agent is blocked on you the whole time, so nothing lands behind your back.
 Take five minutes or take an hour — it waits, and picks up exactly where you
 left it.
 
-## Why it beats reading the diff in your terminal
+### The agent does not review its own code
 
-**The agent goes first.** Before you look at anything, it writes what it did and
-why, and pins notes to the lines it isn't sure about — a hard-coded value, debt
-it took on, a refactor it isn't certain you want. You start reading with
-context instead of a bare diff.
+By default it opens the page and stops. The reading is yours; it doesn't grade
+its own work, and doesn't fill the diff with notes you then have to skim past.
+
+If you do want its take first, ask for it:
+
+> review your changes, and flag anything you're unsure about before opening it
+
+Then it goes over the diff first and pins notes to the lines it isn't sure
+about — a hard-coded value, debt it took on, a refactor it isn't certain you
+want — and those show up as comment threads you can reply to like any other.
 
 ![An agent annotation anchored to a changed line](docs/screenshots/annotation-thread.png)
+
+## Why it beats reading the diff in your terminal
+
+**You start with context.** The agent writes what it did and why before you
+look at anything, so you open on a summary instead of a bare diff — and on
+request, on its own notes against the lines it wasn't sure about.
 
 **Your comments land on the line.** No describing a file and a line number in
 chat and hoping the agent finds it.
