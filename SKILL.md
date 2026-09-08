@@ -31,8 +31,9 @@ before opening (see [Reviewing your own work first](#reviewing-your-own-work-fir
 
    A summary is all you write by default. No `annotations` key.
 
-2. Open the review, from the repository root. `--timeout 0` returns as soon as
-   the page is up instead of blocking, so you can show the human the address:
+2. Open the review, from the repository root. `--timeout 0` looks for a result
+   once and returns straight away instead of blocking, so you can show the
+   human the address:
 
    ```bash
    node <skill path>/dist/web-review.mjs --timeout 0
@@ -58,6 +59,13 @@ before opening (see [Reviewing your own work first](#reviewing-your-own-work-fir
    Print the `url` exactly as it came back: the token in it is what
    authenticates the page.
 
+   **Do not end your turn here.** Telling the human something reads like the
+   end of a turn, and it is not one: step 4 belongs to this same turn, right
+   after this text. That is the only reason step 2 used `--timeout 0` — to
+   hand you the address so you could show it and *then* go and wait. Ending
+   the turn on this step is how a submitted review ends up sitting on the
+   server unread while you do other things.
+
 4. Wait for the submission, from the same repository:
 
    ```bash
@@ -70,8 +78,35 @@ before opening (see [Reviewing your own work first](#reviewing-your-own-work-fir
 5. Read the JSON printed between `<<<WEB_REVIEW_RESULT` and
    `WEB_REVIEW_RESULT>>>`.
 
-Do not commit, push, or move on to other work while a round is open. You are
+## While a round is open
+
+Do not commit, push, or move on to other work of your own accord. You are
 waiting on the human.
+
+The human, though, will interrupt you — that is normal, they are reading a
+diff and thinking out loud, and what they ask for may well be a change to the
+very code under review. Do what they ask. But **a round you left open is still
+open**, and nothing else will remind you:
+
+- Before you answer any request that arrives while a round is open, ask
+  whether the review has landed:
+
+  ```bash
+  node <skill path>/dist/web-review.mjs --timeout 0
+  ```
+
+  `--timeout 0` looks once and returns straight away, so this costs one call
+  and no waiting — unlike step 4's command, which blocks for nine minutes.
+- `pending` means the human is still reading. Carry on with what they asked,
+  and repeat the address and the "waiting" line at the end of your reply so
+  the link stays in view.
+- `submitted` means the round is over. Act on the verdict, and say that the
+  review predates whatever you have changed since it was opened.
+- Never take silence for an answer. A submission made while nothing was
+  waiting is held on disk indefinitely and handed to the next run, so "the
+  human has not submitted yet" is something you learn from a `pending` and
+  from nothing else. Not having seen a result is not evidence that there
+  isn't one.
 
 ## What each status means
 

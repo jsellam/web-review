@@ -205,6 +205,42 @@ describe('the CLI', () => {
     });
   }, 30_000);
 
+  it('--timeout 0 returns a submission that already landed, instead of pending', async () => {
+    // `--timeout 0` is how an agent asks "has the human submitted yet?"
+    // without blocking for the full wait — step 2 of the skill opens the
+    // round with it, and an agent interrupted mid-review polls with it. It
+    // used to consult the deadline before ever reading result.json, so a
+    // review submitted seconds earlier came back as `pending` and sat there
+    // unread. The file is now always read once, deadline or no deadline.
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const pending = await cli(['--no-open', '--timeout', '2']);
+    const url = new URL(pending.url!);
+    const token = url.searchParams.get('t')!;
+
+    const posted = await fetch(`${url.origin}/api/review`, {
+      method: 'POST',
+      headers: { 'x-review-token': token, 'content-type': 'application/json' },
+      body: JSON.stringify({ verdict: 'approve', general: '' }),
+    });
+    expect(posted.status).toBe(200);
+
+    const probed = await cli(['--no-open', '--timeout', '0']);
+
+    expect(probed.status).toBe('submitted');
+    expect(probed.verdict).toBe('approve');
+  }, 30_000);
+
+  it('--timeout 0 still says pending while the human is still reading', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    await cli(['--no-open', '--timeout', '2']);
+    const probed = await cli(['--no-open', '--timeout', '0']);
+
+    expect(probed.status).toBe('pending');
+    expect(probed.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?t=/);
+  }, 30_000);
+
   it('keeps an old-side comment on a renamed file instead of dropping it', async () => {
     // The old-side content lives at the pre-rename path in the base commit —
     // `src/auth.ts` never existed at `src/renamed-auth.ts` there. A comment

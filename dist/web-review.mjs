@@ -85,6 +85,11 @@ async function resolveRange(spec, opts) {
   const base = await git(["rev-parse", spec], opts);
   return { base, label: `working tree vs ${spec}`, staged: false };
 }
+async function headLabel(opts) {
+  const branch = await git(["symbolic-ref", "--short", "-q", "HEAD"], opts).catch(() => null);
+  if (branch) return branch;
+  return await git(["rev-parse", "--short", "HEAD"], opts).catch(() => null) ?? "HEAD";
+}
 async function branchBase(opts) {
   const branch = await detectDefaultBranch(opts);
   if (!branch) return null;
@@ -92,7 +97,7 @@ async function branchBase(opts) {
   if (base === null) return null;
   const head = await git(["rev-parse", "HEAD"], opts).catch(() => null);
   if (base === head) return null;
-  return { base, label: `branch vs ${branch}`, staged: false };
+  return { base, label: `${await headLabel(opts)} vs ${branch}`, staged: false };
 }
 
 // src/server/git/files.ts
@@ -1113,16 +1118,16 @@ async function serveMain(cwd, stateDir) {
 }
 async function waitForResult(stateDir, timeoutSeconds) {
   const deadline = Date.now() + timeoutSeconds * 1e3;
-  while (Date.now() < deadline) {
+  for (; ; ) {
     const raw = await readFile6(join6(stateDir, RESULT_FILE), "utf8").catch(() => null);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
       await rm3(join6(stateDir, RESULT_FILE), { force: true });
       return parsed;
     }
+    if (Date.now() >= deadline) return null;
     await new Promise((resolve3) => setTimeout(resolve3, 250));
   }
-  return null;
 }
 var LOCK_FILE = "server.lock";
 var LOCK_STALE_MS = 1e4;

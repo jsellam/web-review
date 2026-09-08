@@ -60,8 +60,8 @@ describe('renderPrepare', () => {
   it('shortens a full sha in the range line but leaves a symbolic ref alone', () => {
     const sha = '3f2a1c9b8e7d6c5b4a3928170615243342516273';
     expect(
-      renderPrepare({ base: sha, label: 'branch vs main' }, [{ entry: entry(), lines: SAMPLE }]),
-    ).toContain('range: branch vs main (base 3f2a1c9)');
+      renderPrepare({ base: sha, label: 'feature vs main' }, [{ entry: entry(), lines: SAMPLE }]),
+    ).toContain('range: feature vs main (base 3f2a1c9)');
   });
 
   it('names the old path of a rename in the header', () => {

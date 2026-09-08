@@ -238,11 +238,20 @@ async function serveMain(cwd: string, stateDir: string): Promise<void> {
   setTimeout(() => void handle.close().then(() => process.exit(0)), 250).unref();
 }
 
-/** Wait for a result to appear, either from this process's server or another's. */
+/**
+ * Wait for a result to appear, either from this process's server or another's.
+ *
+ * The file is always read once before the deadline is consulted, so
+ * `--timeout 0` means "look now and do not wait" rather than "do not look" —
+ * which is what it used to mean, and what made it a way to miss a submission
+ * that had already landed. A zero timeout is the only honest way to ask
+ * "has the human submitted yet?" without blocking for the full wait, and an
+ * answer of `pending` is only worth anything if the question was actually put.
+ */
 async function waitForResult(stateDir: string, timeoutSeconds: number): Promise<CliResult | null> {
   const deadline = Date.now() + timeoutSeconds * 1000;
 
-  while (Date.now() < deadline) {
+  for (;;) {
     const raw = await readFile(join(stateDir, RESULT_FILE), 'utf8').catch(() => null);
     if (raw !== null) {
       // Parse before deleting: result.json is now written via temp-plus-rename,
@@ -252,10 +261,9 @@ async function waitForResult(stateDir: string, timeoutSeconds: number): Promise<
       await rm(join(stateDir, RESULT_FILE), { force: true });
       return parsed;
     }
+    if (Date.now() >= deadline) return null;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-
-  return null;
 }
 
 const LOCK_FILE = 'server.lock';

@@ -1,7 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiffPane } from './DiffPane.js';
 import type { ReviewApi } from '../../api/client.js';
+import { useDraftStore } from '../../state/draft.js';
 import type { FileEntry, Thread } from '../../../../src/shared/types.js';
 
 const OLD_CONTENT = 'export function sign() {\n  return 1;\n}\n';
@@ -50,6 +51,10 @@ beforeAll(() => {
   })) as unknown as typeof window.matchMedia;
 });
 
+beforeEach(() => {
+  useDraftStore.getState().reset();
+});
+
 describe('DiffPane', () => {
   it('renders a thread\'s message under its anchored line (extendData -> renderExtendLine)', async () => {
     const threads = [thread('t1', 'new', 2, '  return 2;', 'return a token instead')];
@@ -83,6 +88,19 @@ describe('DiffPane', () => {
 
     await waitFor(() => expect(screen.getByText('live comment')).toBeInTheDocument());
     expect(screen.getByText(/1 outdated comment/i)).toBeInTheDocument();
+  });
+
+  it('shows an unsent comment as a card rather than as an open editor', async () => {
+    // The reviewer wrote this on line 2 and moved on. Leaving it in a focused
+    // composer with a primary button reads as "you are still typing", which is
+    // what this is here to catch.
+    useDraftStore.getState().setComment('src/auth.ts', 'new', 2, 'return a token instead');
+
+    render(<DiffPane api={api} file={file} mode="split" enabled threads={[]} />);
+
+    expect(await screen.findByText('return a token instead')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit/i })).toBeInTheDocument();
   });
 
   it('keeps an old-side comment on a renamed file attached after the round trip', async () => {

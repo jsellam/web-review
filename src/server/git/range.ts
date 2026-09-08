@@ -42,6 +42,20 @@ export async function resolveRange(spec: string, opts: GitOptions): Promise<Diff
 }
 
 /**
+ * What to call HEAD in a label. The branch name when there is one, and the
+ * short sha when HEAD is detached — which is what a person would call it too,
+ * and is still more use than the bare word "branch".
+ */
+async function headLabel(opts: GitOptions): Promise<string> {
+  // `symbolic-ref -q` exits non-zero on a detached HEAD rather than printing
+  // the useless "HEAD" that `rev-parse --abbrev-ref` would give us there.
+  const branch = await git(['symbolic-ref', '--short', '-q', 'HEAD'], opts).catch(() => null);
+  if (branch) return branch;
+
+  return (await git(['rev-parse', '--short', 'HEAD'], opts).catch(() => null)) ?? 'HEAD';
+}
+
+/**
  * The whole branch: every commit since it left the default branch, plus
  * whatever is still uncommitted. Uncommitted work does *not* narrow the range
  * to HEAD — a feature branch is reviewed as a unit, the way a pull request is.
@@ -59,5 +73,5 @@ async function branchBase(opts: GitOptions): Promise<DiffRange | null> {
   const head = await git(['rev-parse', 'HEAD'], opts).catch(() => null);
   if (base === head) return null;
 
-  return { base, label: `branch vs ${branch}`, staged: false };
+  return { base, label: `${await headLabel(opts)} vs ${branch}`, staged: false };
 }
