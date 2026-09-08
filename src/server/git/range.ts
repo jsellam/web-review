@@ -12,10 +12,6 @@ export interface DiffRange {
 
 const DEFAULT_BRANCH_CANDIDATES = ['main', 'master', 'develop'];
 
-export async function isDirty(opts: GitOptions): Promise<boolean> {
-  return (await git(['status', '--porcelain'], opts)).trim().length > 0;
-}
-
 /** Pick the branch a feature branch was most likely cut from. */
 export async function detectDefaultBranch(opts: GitOptions): Promise<string | null> {
   for (const candidate of DEFAULT_BRANCH_CANDIDATES) {
@@ -34,15 +30,8 @@ export async function resolveRange(spec: string, opts: GitOptions): Promise<Diff
   }
 
   if (spec === 'auto') {
-    if (await isDirty(opts)) {
-      return { base: 'HEAD', label: 'working tree vs HEAD', staged: false };
-    }
-    const branch = await detectDefaultBranch(opts);
-    if (!branch) {
-      return { base: 'HEAD', label: 'working tree vs HEAD', staged: false };
-    }
-    const base = await git(['merge-base', branch, 'HEAD'], opts);
-    return { base, label: `branch vs ${branch}`, staged: false };
+    const base = await branchBase(opts);
+    return base ?? { base: 'HEAD', label: 'working tree vs HEAD', staged: false };
   }
 
   if (!(await gitOk(['rev-parse', '--verify', '--quiet', `${spec}^{commit}`], opts))) {
@@ -50,4 +39,25 @@ export async function resolveRange(spec: string, opts: GitOptions): Promise<Diff
   }
   const base = await git(['rev-parse', spec], opts);
   return { base, label: `working tree vs ${spec}`, staged: false };
+}
+
+/**
+ * The whole branch: every commit since it left the default branch, plus
+ * whatever is still uncommitted. Uncommitted work does *not* narrow the range
+ * to HEAD — a feature branch is reviewed as a unit, the way a pull request is.
+ *
+ * Null when there is nothing wider than HEAD to show: no default branch, HEAD
+ * already on it (or behind it), or histories with no common ancestor.
+ */
+async function branchBase(opts: GitOptions): Promise<DiffRange | null> {
+  const branch = await detectDefaultBranch(opts);
+  if (!branch) return null;
+
+  const base = await git(['merge-base', branch, 'HEAD'], opts).catch(() => null);
+  if (base === null) return null;
+
+  const head = await git(['rev-parse', 'HEAD'], opts).catch(() => null);
+  if (base === head) return null;
+
+  return { base, label: `branch vs ${branch}`, staged: false };
 }
