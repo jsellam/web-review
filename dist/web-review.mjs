@@ -510,6 +510,15 @@ function asVerdict(value) {
   }
   return value;
 }
+function toMessageRef(raw, index) {
+  const field = `deletions[${index}]`;
+  if (!isRecord(raw)) throw new RequestError(`${field} must be a JSON object`);
+  const at = raw["index"];
+  if (typeof at !== "number" || !Number.isInteger(at) || at < 0) {
+    throw new RequestError(`${field}.index must be an integer >= 0`);
+  }
+  return { threadId: asString(raw["threadId"], `${field}.threadId`), index: at };
+}
 function asIdList(value, field) {
   return asArray(value, field).map((id, index) => {
     if (typeof id !== "string") throw new RequestError(`${field}[${index}] must be a string`);
@@ -524,7 +533,8 @@ function validateSubmit(raw) {
     newComments: asArray(raw["newComments"], "newComments").map(toLineComment("newComments")),
     replies: asArray(raw["replies"], "replies").map(toReply),
     resolved: asIdList(raw["resolved"], "resolved"),
-    reopened: asIdList(raw["reopened"], "reopened")
+    reopened: asIdList(raw["reopened"], "reopened"),
+    deletions: asArray(raw["deletions"], "deletions").map(toMessageRef)
   };
 }
 
@@ -620,8 +630,32 @@ async function openRound(state, request, lookup, now = nowIso) {
   }
   return { version: 1, round, threads };
 }
+function applyDeletions(threads, deletions) {
+  if (deletions.length === 0) return threads;
+  const byThread = /* @__PURE__ */ new Map();
+  for (const { threadId, index } of deletions) {
+    const set = byThread.get(threadId) ?? /* @__PURE__ */ new Set();
+    set.add(index);
+    byThread.set(threadId, set);
+  }
+  const result = [];
+  for (const thread of threads) {
+    const removed = byThread.get(thread.id);
+    if (!removed) {
+      result.push(thread);
+      continue;
+    }
+    const messages = thread.messages.filter((_, index) => !removed.has(index));
+    if (messages.length === thread.messages.length) {
+      result.push(thread);
+      continue;
+    }
+    if (messages.length > 0) result.push({ ...thread, messages });
+  }
+  return result;
+}
 async function applySubmission(state, payload, lookup, now = nowIso) {
-  const threads = state.threads.map((thread) => ({ ...thread }));
+  let threads = state.threads.map((thread) => ({ ...thread }));
   const unanchored = [];
   for (const reply of payload.replies) {
     const thread = threads.find((t) => t.id === reply.threadId);
@@ -637,6 +671,7 @@ async function applySubmission(state, payload, lookup, now = nowIso) {
     const thread = threads.find((t) => t.id === id);
     if (thread) thread.status = "open";
   }
+  threads = applyDeletions(threads, payload.deletions);
   for (const comment of payload.newComments) {
     const lines = await lookup(comment.file, comment.side);
     if (!lines || lines[comment.line - 1] === void 0) {

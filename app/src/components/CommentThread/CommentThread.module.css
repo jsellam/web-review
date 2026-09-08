@@ -1,0 +1,10 @@
+/*
+ * A message staged for deletion stays visible until the review is submitted —
+ * nothing is destroyed while it can still be undone, so the reviewer can see
+ * exactly what they are about to remove and take it back.
+ */
+.deleted {
+  opacity: 0.55;
+  text-decoration: line-through;
+  text-decoration-color: var(--del-fg);
+}

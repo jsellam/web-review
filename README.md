@@ -49,10 +49,12 @@ So if the browser didn't open — a remote session, a container, no desktop —
 the link is right there in the transcript. It stays valid until you submit;
 the token in it is what lets the page through.
 
-From there it is GitHub, with the parts that matter: file tree, split or
+From there it is GitHub, with the parts that matter: a file tree that badges
+each file as added, modified or deleted and that you can drag wider, split or
 unified, syntax highlighting, *Viewed* checkboxes, and comments you attach to a
-line by clicking it. When you're done, **Review** lets you approve, request
-changes, or just leave notes.
+line by clicking it. Any comment can be deleted — the agent's notes as much as
+your own — and nothing is actually removed until you submit. When you're done,
+**Review** lets you approve, request changes, or just leave notes.
 
 The agent is blocked on you the whole time, so nothing lands behind your back.
 Take five minutes or take an hour — it waits, and picks up exactly where you

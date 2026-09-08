@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { buildSubmit, draftKey, pendingCount, useDraftStore } from './draft.js';
+import { buildSubmit, deletionKey, draftKey, pendingCount, useDraftStore } from './draft.js';
 
 beforeEach(() => {
   useDraftStore.getState().reset();
@@ -9,6 +9,13 @@ describe('draftKey', () => {
   it('identifies a comment position uniquely', () => {
     expect(draftKey('src/a.ts', 'new', 12)).toBe('src/a.ts:new:12');
     expect(draftKey('src/a.ts', 'old', 12)).not.toBe(draftKey('src/a.ts', 'new', 12));
+  });
+});
+
+describe('deletionKey', () => {
+  it('identifies one message inside one thread', () => {
+    expect(deletionKey('t1', 0)).toBe('t1#0');
+    expect(deletionKey('t1', 0)).not.toBe(deletionKey('t1', 1));
   });
 });
 
@@ -62,6 +69,30 @@ describe('the draft store', () => {
     expect(useDraftStore.getState().resolved).toEqual({ t2: true });
   });
 
+  it('stages and unstages a single message for deletion', () => {
+    useDraftStore.getState().setDeleted('t1', 1, true);
+    expect(useDraftStore.getState().deletions).toEqual({ 't1#1': { threadId: 't1', index: 1 } });
+
+    useDraftStore.getState().setDeleted('t1', 1, false);
+    expect(useDraftStore.getState().deletions).toEqual({});
+  });
+
+  it('stages every message of a thread at once, and takes them all back', () => {
+    useDraftStore.getState().setThreadDeleted('t1', 3, true);
+    expect(Object.keys(useDraftStore.getState().deletions)).toEqual(['t1#0', 't1#1', 't1#2']);
+
+    useDraftStore.getState().setThreadDeleted('t1', 3, false);
+    expect(useDraftStore.getState().deletions).toEqual({});
+  });
+
+  it('leaves another thread alone when one thread is deleted wholesale', () => {
+    useDraftStore.getState().setDeleted('t2', 0, true);
+    useDraftStore.getState().setThreadDeleted('t1', 2, true);
+    useDraftStore.getState().setThreadDeleted('t1', 2, false);
+
+    expect(Object.keys(useDraftStore.getState().deletions)).toEqual(['t2#0']);
+  });
+
   it('remembers which files have been marked viewed', () => {
     useDraftStore.getState().setViewed('src/a.ts', true);
 
@@ -70,12 +101,13 @@ describe('the draft store', () => {
 });
 
 describe('pendingCount', () => {
-  it('counts comments, replies and resolve toggles together', () => {
+  it('counts comments, replies, resolve toggles and deletions together', () => {
     useDraftStore.getState().setComment('src/a.ts', 'new', 1, 'a');
     useDraftStore.getState().setReply('t1', 'b');
     useDraftStore.getState().setResolved('t2', true);
+    useDraftStore.getState().setDeleted('t3', 0, true);
 
-    expect(pendingCount(useDraftStore.getState())).toBe(3);
+    expect(pendingCount(useDraftStore.getState())).toBe(4);
   });
 
   it('drops back to zero once a resolve-only toggle is undone', () => {
@@ -101,6 +133,7 @@ describe('buildSubmit', () => {
     useDraftStore.getState().setReply('t1', 'agreed');
     useDraftStore.getState().setResolved('t2', true);
     useDraftStore.getState().setResolved('t3', false);
+    useDraftStore.getState().setDeleted('t4', 2, true);
     useDraftStore.getState().setGeneral('Two things.');
 
     expect(buildSubmit(useDraftStore.getState(), 'request_changes')).toEqual({
@@ -110,6 +143,7 @@ describe('buildSubmit', () => {
       replies: [{ threadId: 't1', body: 'agreed' }],
       resolved: ['t2'],
       reopened: ['t3'],
+      deletions: [{ threadId: 't4', index: 2 }],
     });
   });
 
@@ -121,6 +155,7 @@ describe('buildSubmit', () => {
       replies: [],
       resolved: [],
       reopened: [],
+      deletions: [],
     });
   });
 });

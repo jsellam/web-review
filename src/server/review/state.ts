@@ -4,6 +4,7 @@ import { contextHash, makeAnchor, relocate } from './anchor.js';
 import { isENOENT } from './request.js';
 import type {
   Message,
+  MessageRef,
   NewComment,
   ReviewRequest,
   ReviewState,
@@ -153,6 +154,51 @@ export interface ApplySubmissionResult {
   unanchored: NewComment[];
 }
 
+/**
+ * Drop the messages the reviewer deleted, and with them any thread left empty.
+ *
+ * Indices address `Thread.messages` as the browser was shown it. Replies from
+ * the same submission are appended before this runs, but appending never moves
+ * an existing message, so those indices are still the ones they were — and a
+ * reply is deliberately not deletable in the same round it is written, so no
+ * index can point at one.
+ *
+ * A thread emptied of every message is removed outright rather than kept as a
+ * husk: `openRound` would keep relocating it forever, and the agent would keep
+ * receiving a thread with nothing in it. Only threads this call actually
+ * touched are considered, so a thread that arrived empty is left alone.
+ */
+function applyDeletions(threads: Thread[], deletions: MessageRef[]): Thread[] {
+  if (deletions.length === 0) return threads;
+
+  const byThread = new Map<string, Set<number>>();
+  for (const { threadId, index } of deletions) {
+    const set = byThread.get(threadId) ?? new Set<number>();
+    set.add(index);
+    byThread.set(threadId, set);
+  }
+
+  const result: Thread[] = [];
+  for (const thread of threads) {
+    const removed = byThread.get(thread.id);
+    if (!removed) {
+      result.push(thread);
+      continue;
+    }
+
+    const messages = thread.messages.filter((_, index) => !removed.has(index));
+    // Nothing actually matched — a stale index, or a thread that was already
+    // empty. Leave it exactly as it was rather than treating "no messages
+    // left" as "the reviewer deleted the last one".
+    if (messages.length === thread.messages.length) {
+      result.push(thread);
+      continue;
+    }
+    if (messages.length > 0) result.push({ ...thread, messages });
+  }
+  return result;
+}
+
 /** Fold the human's submission into the state. New comments are anchored here. */
 export async function applySubmission(
   state: ReviewState,
@@ -160,7 +206,7 @@ export async function applySubmission(
   lookup: LinesLookup,
   now: () => string = nowIso,
 ): Promise<ApplySubmissionResult> {
-  const threads = state.threads.map((thread) => ({ ...thread }));
+  let threads = state.threads.map((thread) => ({ ...thread }));
   const unanchored: NewComment[] = [];
 
   for (const reply of payload.replies) {
@@ -179,6 +225,10 @@ export async function applySubmission(
     const thread = threads.find((t) => t.id === id);
     if (thread) thread.status = 'open';
   }
+
+  // Before the new comments are appended, so a fresh thread can never collide
+  // with a deletion index meant for one of the threads already in the state.
+  threads = applyDeletions(threads, payload.deletions);
 
   for (const comment of payload.newComments) {
     const lines = await lookup(comment.file, comment.side);

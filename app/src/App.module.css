@@ -10,11 +10,17 @@
  */
 .shell {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  /*
+   * The sidebar column is driven by `--sidebar-width`, which App sets inline as
+   * the resizer is dragged. Keeping it a custom property rather than a styled
+   * column means the drag touches one declaration instead of re-writing the
+   * whole `grid-template-columns` string on every pointer move.
+   */
+  grid-template-columns: var(--sidebar-width, 280px) 5px 1fr;
   grid-template-rows: 40px 1fr;
   grid-template-areas:
-    "header header"
-    "sidebar content";
+    "header  header  header"
+    "sidebar resizer content";
   height: 100vh;
 }
 
@@ -82,11 +88,12 @@
   text-align: center;
 }
 
+/* No border-right: the resizer next to it draws that line, and hovers it. */
 .sidebar {
   grid-area: sidebar;
   padding: var(--space-3) var(--space-2);
   background: var(--bg-raised);
-  border-right: 1px solid var(--border);
+  min-width: 0;
   overflow: auto;
 }
 

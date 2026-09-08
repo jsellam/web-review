@@ -34,6 +34,7 @@ describe('SubmitDrawer', () => {
         replies: [],
         resolved: [],
         reopened: [],
+        deletions: [],
       }),
     );
   });

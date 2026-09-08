@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { Alert, ConfigProvider, Result, Spin, Typography, theme } from 'antd';
 import { useResolvedTheme } from './theme.js';
 import { Segmented } from './components/Segmented/Segmented.js';
 import { ThemeToggle } from './components/ThemeToggle/ThemeToggle.js';
 import { FileTree } from './components/FileTree/FileTree.js';
+import { Resizer } from './components/Resizer/Resizer.js';
 import { countThreadsByFile } from './components/FileTree/tree.js';
 import { FileSection } from './components/FileSection/FileSection.js';
 import { SummaryPanel } from './components/SummaryPanel/SummaryPanel.js';
@@ -20,6 +21,11 @@ const MODE_OPTIONS: { value: ViewMode; label: string }[] = [
   { value: 'unified', label: 'Unified' },
 ];
 
+/** Sidebar width, in px: the default the shell grid also falls back to, and its bounds. */
+const SIDEBAR_DEFAULT = 280;
+const SIDEBAR_MIN = 160;
+const SIDEBAR_MAX = 640;
+
 interface Props {
   api: ReviewApi;
 }
@@ -29,6 +35,7 @@ export function App({ api }: Props) {
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<ViewMode>('split');
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [done, setDone] = useState(false);
   const [unanchored, setUnanchored] = useState<NewComment[]>([]);
@@ -84,7 +91,10 @@ export function App({ api }: Props) {
     <ConfigProvider
       theme={{ algorithm: resolved === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}
     >
-      <div className={styles.shell}>
+      <div
+        className={styles.shell}
+        style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      >
         <header className={styles.header}>
           <span className={styles.brand}>web-review</span>
           {session ? (
@@ -139,6 +149,14 @@ export function App({ api }: Props) {
             />
           ) : null}
         </aside>
+
+        <Resizer
+          width={sidebarWidth}
+          min={SIDEBAR_MIN}
+          max={SIDEBAR_MAX}
+          onChange={setSidebarWidth}
+          onReset={() => setSidebarWidth(SIDEBAR_DEFAULT)}
+        />
 
         <main className={styles.content}>
           {error ? <Alert type="error" message={error} showIcon /> : null}

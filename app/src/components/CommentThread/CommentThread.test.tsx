@@ -72,6 +72,51 @@ describe('CommentThread', () => {
     expect(screen.queryByText(/will be reopened/i)).not.toBeInTheDocument();
   });
 
+  it('stages one message for deletion without touching its neighbour', async () => {
+    render(<CommentThread thread={thread} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /delete message 1/i }));
+
+    expect(useDraftStore.getState().deletions).toEqual({ 't1#0': { threadId: 't1', index: 0 } });
+  });
+
+  it("deletes the agent's message as readily as the reviewer's own", async () => {
+    render(<CommentThread thread={thread} />);
+
+    // Message 2 is the agent's; nothing about the control depends on the author.
+    await userEvent.click(screen.getByRole('button', { name: /delete message 2/i }));
+
+    expect(useDraftStore.getState().deletions['t1#1']).toEqual({ threadId: 't1', index: 1 });
+  });
+
+  it('offers the way back on a message already staged for deletion', async () => {
+    render(<CommentThread thread={thread} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /delete message 1/i }));
+    await userEvent.click(screen.getByRole('button', { name: /restore message 1/i }));
+
+    expect(useDraftStore.getState().deletions).toEqual({});
+  });
+
+  it('stages every message at once when the whole thread is deleted', async () => {
+    render(<CommentThread thread={thread} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /delete thread/i }));
+
+    expect(Object.keys(useDraftStore.getState().deletions)).toEqual(['t1#0', 't1#1']);
+    expect(screen.getByText(/will be deleted/i)).toBeInTheDocument();
+  });
+
+  it('hides reply and resolve while the whole thread is on its way out', async () => {
+    render(<CommentThread thread={thread} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /delete thread/i }));
+
+    expect(screen.queryByRole('button', { name: /^reply$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^resolve$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restore thread/i })).toBeInTheDocument();
+  });
+
   it('marks an outdated thread and still shows its messages', () => {
     render(<CommentThread thread={{ ...thread, status: 'outdated' }} />);
 

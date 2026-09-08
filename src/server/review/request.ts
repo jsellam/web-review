@@ -1,6 +1,13 @@
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Reply, ReviewRequest, Side, SubmitPayload, Verdict } from '../../shared/types.js';
+import type {
+  MessageRef,
+  Reply,
+  ReviewRequest,
+  Side,
+  SubmitPayload,
+  Verdict,
+} from '../../shared/types.js';
 
 export const REQUEST_FILE = 'request.json';
 
@@ -122,6 +129,18 @@ function asVerdict(value: unknown): Verdict {
   return value as Verdict;
 }
 
+function toMessageRef(raw: unknown, index: number): MessageRef {
+  const field = `deletions[${index}]`;
+  if (!isRecord(raw)) throw new RequestError(`${field} must be a JSON object`);
+
+  const at = raw['index'];
+  if (typeof at !== 'number' || !Number.isInteger(at) || at < 0) {
+    throw new RequestError(`${field}.index must be an integer >= 0`);
+  }
+
+  return { threadId: asString(raw['threadId'], `${field}.threadId`), index: at };
+}
+
 function asIdList(value: unknown, field: string): string[] {
   return asArray(value, field).map((id, index) => {
     if (typeof id !== 'string') throw new RequestError(`${field}[${index}] must be a string`);
@@ -140,5 +159,6 @@ export function validateSubmit(raw: unknown): SubmitPayload {
     replies: asArray(raw['replies'], 'replies').map(toReply),
     resolved: asIdList(raw['resolved'], 'resolved'),
     reopened: asIdList(raw['reopened'], 'reopened'),
+    deletions: asArray(raw['deletions'], 'deletions').map(toMessageRef),
   };
 }

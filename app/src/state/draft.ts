@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Side, SubmitPayload, Verdict } from '../../../src/shared/types.js';
+import type { MessageRef, Side, SubmitPayload, Verdict } from '../../../src/shared/types.js';
 
 export interface Draft {
   file: string;
@@ -13,12 +13,17 @@ export interface DraftState {
   replies: Record<string, string>;
   /** true = resolve on submit, false = reopen on submit. */
   resolved: Record<string, boolean>;
+  /** Messages staged for deletion, keyed by `deletionKey`. */
+  deletions: Record<string, MessageRef>;
   general: string;
   viewed: Record<string, boolean>;
   setComment(file: string, side: Side, line: number, body: string): void;
   removeComment(key: string): void;
   setReply(threadId: string, body: string): void;
   setResolved(threadId: string, value: boolean, original?: boolean): void;
+  setDeleted(threadId: string, index: number, value: boolean): void;
+  /** Stage (or unstage) every message of a thread at once — "delete the whole thread". */
+  setThreadDeleted(threadId: string, messageCount: number, value: boolean): void;
   setGeneral(body: string): void;
   setViewed(file: string, value: boolean): void;
   reset(): void;
@@ -28,10 +33,15 @@ export function draftKey(file: string, side: Side, line: number): string {
   return `${file}:${side}:${line}`;
 }
 
+export function deletionKey(threadId: string, index: number): string {
+  return `${threadId}#${index}`;
+}
+
 const EMPTY = {
   comments: {} as Record<string, Draft>,
   replies: {} as Record<string, string>,
   resolved: {} as Record<string, boolean>,
+  deletions: {} as Record<string, MessageRef>,
   general: '',
   viewed: {} as Record<string, boolean>,
 };
@@ -78,6 +88,27 @@ export const useDraftStore = create<DraftState>((set) => ({
     );
   },
 
+  setDeleted(threadId, index, value) {
+    const key = deletionKey(threadId, index);
+    set((state) =>
+      value
+        ? { deletions: { ...state.deletions, [key]: { threadId, index } } }
+        : { deletions: withoutKey(state.deletions, key) },
+    );
+  },
+
+  setThreadDeleted(threadId, messageCount, value) {
+    set((state) => {
+      const deletions = { ...state.deletions };
+      for (let index = 0; index < messageCount; index += 1) {
+        const key = deletionKey(threadId, index);
+        if (value) deletions[key] = { threadId, index };
+        else delete deletions[key];
+      }
+      return { deletions };
+    });
+  },
+
   setGeneral(general) {
     set({ general });
   },
@@ -96,7 +127,8 @@ export function pendingCount(state: DraftState): number {
   return (
     Object.keys(state.comments).length +
     Object.keys(state.replies).length +
-    Object.keys(state.resolved).length
+    Object.keys(state.resolved).length +
+    Object.keys(state.deletions).length
   );
 }
 
@@ -113,5 +145,6 @@ export function buildSubmit(state: DraftState, verdict: Verdict): SubmitPayload 
     replies: Object.entries(state.replies).map(([threadId, body]) => ({ threadId, body })),
     resolved: Object.entries(state.resolved).filter(([, v]) => v).map(([id]) => id),
     reopened: Object.entries(state.resolved).filter(([, v]) => !v).map(([id]) => id),
+    deletions: Object.values(state.deletions),
   };
 }

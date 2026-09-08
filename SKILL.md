@@ -117,6 +117,10 @@ original comment.
 Threads with `"status": "outdated"` were anchored to lines that no longer exist.
 Read them for intent; do not try to apply them literally.
 
+A thread you saw in an earlier round can be missing from `threads` entirely: the
+human can delete any comment in the page, yours included. Treat it as withdrawn
+and move on — do not raise it again.
+
 ## Reviewing your own work first
 
 Only when the user explicitly asks for it — "review your changes before opening

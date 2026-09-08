@@ -38,3 +38,15 @@ code,
 pre {
   font-family: var(--font-mono);
 }
+
+/*
+ * Set on <body> while the sidebar resizer is being dragged. The pointer
+ * routinely leaves the 5px handle mid-drag; without this the cursor flickers
+ * back to a text caret and the diff underneath starts selecting. Global rather
+ * than a CSS module because it is applied to an element React does not own.
+ */
+body.is-resizing,
+body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}

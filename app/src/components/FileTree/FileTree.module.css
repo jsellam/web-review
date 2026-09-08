@@ -1,0 +1,87 @@
+/*
+ * One tree row: badge, name, comment count. `min-width: 0` on the flex parent
+ * and on the name is what lets the name ellipsize instead of widening the row
+ * — without it the row grows past the sidebar and the horizontal scrollbar
+ * appears instead of the ellipsis, which is the whole point of the resizer.
+ */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.badge {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-1);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* A directory keeps the badge column so every name in the tree starts flush. */
+.spacer {
+  flex: none;
+  width: 15px;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.count {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--text-1);
+  font-weight: 600;
+  line-height: 15px;
+}
+
+.added    { color: var(--add-fg); }
+.modified { color: var(--mod-fg); }
+.deleted  { color: var(--del-fg); }
+.renamed  { color: var(--ren-fg); }
+
+.added.badge    { background: var(--add-bg); }
+.modified.badge { background: var(--mod-bg); }
+.deleted.badge  { background: var(--del-bg); }
+.renamed.badge  { background: var(--ren-bg); }
+
+/* A deleted file's own name is struck through, the way a diff strikes its rows. */
+.deleted.name {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--del-fg) 50%, transparent);
+}
+
+/*
+ * antd sizes a tree row to its content and lets it overflow the sidebar. The
+ * name can only ellipsize once every wrapper between the row and it is allowed
+ * to shrink, so the chain — treenode, content wrapper, title — is pinned to the
+ * available width here. `:global` because these are antd's own class names.
+ */
+.tree :global(.ant-tree-treenode) {
+  width: 100%;
+}
+
+.tree :global(.ant-tree-node-content-wrapper) {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree :global(.ant-tree-title) {
+  display: block;
+  min-width: 0;
+}

@@ -49,6 +49,7 @@ describe('createApi', () => {
       replies: [],
       resolved: [],
       reopened: [],
+      deletions: [],
     };
 
     await createApi('tok', fetchImpl as unknown as typeof fetch).submit(payload);
@@ -70,6 +71,7 @@ describe('createApi', () => {
       replies: [],
       resolved: [],
       reopened: [],
+      deletions: [],
     };
 
     const result = await createApi('tok', fetchImpl as unknown as typeof fetch).submit(payload);

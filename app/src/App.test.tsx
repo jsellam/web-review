@@ -50,7 +50,13 @@ describe('App', () => {
   it('shows the open-thread count next to the file in the tree', async () => {
     render(<App api={api} />);
 
-    expect(await screen.findByText('auth.ts (1)')).toBeInTheDocument();
+    expect(await screen.findByTitle('1 open comment')).toHaveTextContent('1');
+  });
+
+  it('badges each file in the tree with its status', async () => {
+    render(<App api={api} />);
+
+    expect(await screen.findByRole('img', { name: 'modified' })).toHaveTextContent('m');
   });
 
   it('surfaces a session failure instead of spinning forever', async () => {

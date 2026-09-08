@@ -31,11 +31,110 @@ const submission = (over: Partial<SubmitPayload> = {}): SubmitPayload => ({
   replies: [],
   resolved: [],
   reopened: [],
+  deletions: [],
   ...over,
 });
 
 const lookupOf = (files: Record<string, string[]>): LinesLookup =>
   async (file) => files[file] ?? null;
+
+describe('applySubmission deletions', () => {
+  const lookup = lookupOf({ 'a.ts': ['one', 'two'] });
+
+  const withMessages = (...bodies: string[]): ReviewState => ({
+    version: 1,
+    round: 2,
+    threads: [
+      {
+        id: 't1',
+        file: 'a.ts',
+        side: 'new',
+        anchor: { line: 1, content: 'one', contextHash: 'h' },
+        status: 'open',
+        messages: bodies.map((body, index) => ({
+          author: index % 2 === 0 ? ('agent' as const) : ('user' as const),
+          round: 1,
+          body,
+          at: 'now',
+        })),
+      },
+    ],
+  });
+
+  it('removes the addressed message and leaves the rest of the thread alone', async () => {
+    const { state } = await applySubmission(
+      withMessages('agent note', 'my reply'),
+      submission({ deletions: [{ threadId: 't1', index: 0 }] }),
+      lookup,
+    );
+
+    expect(state.threads[0]?.messages.map((m) => m.body)).toEqual(['my reply']);
+  });
+
+  it("deletes an agent's comment as readily as the reviewer's own", async () => {
+    const { state } = await applySubmission(
+      withMessages('agent note'),
+      submission({ deletions: [{ threadId: 't1', index: 0 }] }),
+      lookup,
+    );
+
+    expect(state.threads).toEqual([]);
+  });
+
+  it('drops a thread once every one of its messages is deleted', async () => {
+    const { state } = await applySubmission(
+      withMessages('one', 'two'),
+      submission({
+        deletions: [
+          { threadId: 't1', index: 0 },
+          { threadId: 't1', index: 1 },
+        ],
+      }),
+      lookup,
+    );
+
+    expect(state.threads).toEqual([]);
+  });
+
+  it('keeps a reply added in the same submission as the deletion', async () => {
+    const { state } = await applySubmission(
+      withMessages('agent note'),
+      submission({
+        replies: [{ threadId: 't1', body: 'actually, this' }],
+        deletions: [{ threadId: 't1', index: 0 }],
+      }),
+      lookup,
+    );
+
+    expect(state.threads[0]?.messages.map((m) => m.body)).toEqual(['actually, this']);
+  });
+
+  it('ignores a deletion naming a thread or an index that is not there', async () => {
+    const before = withMessages('only one');
+    const { state } = await applySubmission(
+      before,
+      submission({
+        deletions: [
+          { threadId: 'nope', index: 0 },
+          { threadId: 't1', index: 7 },
+        ],
+      }),
+      lookup,
+    );
+
+    expect(state.threads[0]?.messages.map((m) => m.body)).toEqual(['only one']);
+  });
+
+  it('never touches a thread that arrived with no messages at all', async () => {
+    const { state } = await applySubmission(
+      withMessages(),
+      submission({ deletions: [{ threadId: 't1', index: 0 }] }),
+      lookup,
+    );
+
+    expect(state.threads).toHaveLength(1);
+  });
+});
 
 describe('stateDirFor', () => {
   it('places state inside .git so it never shows up in the diff under review', () => {

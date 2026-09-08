@@ -119,6 +119,7 @@ describe('validateSubmit', () => {
       replies: [{ threadId: 't1', body: 'ok' }],
       resolved: ['t2'],
       reopened: ['t3'],
+      deletions: [{ threadId: 't4', index: 0 }],
     };
 
     expect(validateSubmit(payload)).toEqual(payload);
@@ -132,6 +133,7 @@ describe('validateSubmit', () => {
       replies: [],
       resolved: [],
       reopened: [],
+      deletions: [],
     });
   });
 

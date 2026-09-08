@@ -12,11 +12,17 @@ interface Props {
   onSubmitted(unanchored: NewComment[]): void;
 }
 
-function describeDrafts(comments: number, replies: number, toggles: number): string {
+function describeDrafts(
+  comments: number,
+  replies: number,
+  toggles: number,
+  deletions: number,
+): string {
   const parts = [
     comments > 0 ? `${comments} comment${comments === 1 ? '' : 's'}` : null,
     replies > 0 ? `${replies} repl${replies === 1 ? 'y' : 'ies'}` : null,
     toggles > 0 ? `${toggles} thread update${toggles === 1 ? '' : 's'}` : null,
+    deletions > 0 ? `${deletions} deletion${deletions === 1 ? '' : 's'}` : null,
   ].filter(Boolean);
 
   return parts.length === 0 ? 'No pending comments' : parts.join(', ');
@@ -32,6 +38,7 @@ export function SubmitDrawer({ api, open, onClose, onSubmitted }: Props) {
   const comments = useDraftStore((state) => state.comments);
   const replies = useDraftStore((state) => state.replies);
   const resolved = useDraftStore((state) => state.resolved);
+  const deletions = useDraftStore((state) => state.deletions);
 
   const send = async () => {
     if (sending) return;
@@ -65,6 +72,7 @@ export function SubmitDrawer({ api, open, onClose, onSubmitted }: Props) {
             Object.keys(comments).length,
             Object.keys(replies).length,
             Object.keys(resolved).length,
+            Object.keys(deletions).length,
           )}
         </Typography.Text>
 

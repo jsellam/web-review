@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { buildFileTree, countThreadsByFile } from './tree.js';
 import type { FileEntry, Thread } from '../../../../src/shared/types.js';
 
-const file = (path: string): FileEntry => ({
+const file = (path: string, status: FileEntry['status'] = 'modified'): FileEntry => ({
   path,
   oldPath: path,
-  status: 'modified',
+  status,
   additions: 1,
   deletions: 0,
   binary: false,
@@ -39,6 +39,28 @@ describe('buildFileTree', () => {
     const nodes = buildFileTree([file('a.ts')], {});
 
     expect(nodes[0]?.isLeaf).toBe(true);
+  });
+
+  it('names each node by its own segment, not by the whole path', () => {
+    const nodes = buildFileTree([file('src/deep/b.ts')], {});
+
+    expect(nodes[0]?.name).toBe('src');
+    expect(nodes[0]?.children[0]?.children[0]?.name).toBe('b.ts');
+  });
+
+  it('carries each file status through to its leaf, and none to a directory', () => {
+    const nodes = buildFileTree([file('src/gone.ts', 'deleted'), file('new.ts', 'added')], {});
+
+    expect(nodes[0]?.status).toBeNull();
+    expect(nodes[0]?.children[0]?.status).toBe('deleted');
+    expect(nodes[1]?.status).toBe('added');
+  });
+
+  it('puts the comment count on the node rather than in its name', () => {
+    const nodes = buildFileTree([file('a.ts')], { 'a.ts': 3 });
+
+    expect(nodes[0]?.name).toBe('a.ts');
+    expect(nodes[0]?.count).toBe(3);
   });
 });
 

@@ -48,6 +48,16 @@
   --del-gutter:  light-dark(#fbd0cd, rgba(248, 81, 73, 0.34));
   --del-fg:      light-dark(#cf222e, #ff7b72);
 
+  /*
+   * File status. Add and delete reuse the diff palette so a file's badge and
+   * its rows agree; modified and renamed have no diff equivalent, so they get
+   * their own hues — amber for "changed", the accent blue for "moved".
+   */
+  --mod-fg:      light-dark(#9a6700, #e3b341);
+  --mod-bg:      light-dark(#fff8c5, rgba(227, 179, 65, 0.18));
+  --ren-fg:      light-dark(#4f57e0, #8b92f7);
+  --ren-bg:      light-dark(#eceefe, rgba(139, 146, 247, 0.18));
+
   /* Syntax highlighting. */
   --syntax-keyword: light-dark(#7c3aed, #a78bfa);
   --syntax-string:  light-dark(#0a7d5a, #7dd3a0);
