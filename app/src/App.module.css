@@ -88,10 +88,18 @@
   text-align: center;
 }
 
-/* No border-right: the resizer next to it draws that line, and hovers it. */
+/*
+ * No border-right: the resizer next to it draws that line, and hovers it.
+ *
+ * The horizontal padding lives on the tree inside, not here. A scroll
+ * container's inline padding is not a margin its overflowing content respects
+ * — a long file name scrolls straight through it — so with the padding here
+ * the tree's sticky badges stopped 8px short of the edge and names slid
+ * visibly past them.
+ */
 .sidebar {
   grid-area: sidebar;
-  padding: var(--space-3) var(--space-2);
+  padding: var(--space-3) 0;
   background: var(--bg-raised);
   min-width: 0;
   overflow: auto;

@@ -1,14 +1,62 @@
 /*
- * One tree row: badge, name, comment count. `min-width: 0` on the flex parent
- * and on the name is what lets the name ellipsize instead of widening the row
- * — without it the row grows past the sidebar and the horizontal scrollbar
- * appears instead of the ellipsis, which is the whole point of the resizer.
+ * One tree row: name, comment count, status badge.
+ *
+ * The row grows past the sidebar rather than ellipsize — a path you cannot
+ * read is worth less than one you can scroll to — so nothing in the chain
+ * below carries `min-width: 0`. Nor does it carry `min-width: 100%`: the
+ * treenode already guarantees the full width (see the rule near the bottom),
+ * and a percentage minimum resolved inside its `max-content` sizing blows the
+ * row out to the width of the viewport instead.
  */
 .row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-width: 0;
+}
+
+.name {
+  flex: 1;
+  white-space: nowrap;
+}
+
+/*
+ * The count and the badge, held against the right edge of the sidebar however
+ * far the names have been scrolled. `sticky` resolves against the sidebar,
+ * which is the scroll container; it needs an opaque background of its own or
+ * the name slides visibly underneath, and the fade on its left keeps that from
+ * looking like a cut.
+ */
+.pinned {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  /*
+   * The right padding is what the sidebar gave up: the background reaches the
+   * true edge, so nothing scrolls out from under it, while the badge itself
+   * still sits clear of it.
+   */
+  padding: 0 var(--space-2);
+  background: var(--row-bg);
+}
+
+.pinned::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: var(--space-4);
+  background: linear-gradient(to right, transparent, var(--row-bg));
+  pointer-events: none;
+}
+
+/* Nothing to pin on a row with neither: no background, no fade, no gap. */
+.pinned:empty {
+  display: none;
 }
 
 .badge {
@@ -23,14 +71,6 @@
   line-height: 13px;
   text-align: center;
   text-transform: uppercase;
-}
-
-.name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .count {
@@ -61,12 +101,6 @@
 }
 
 /*
- * antd sizes a tree row to its content and lets it overflow the sidebar. The
- * name can only ellipsize once every wrapper between the row and it is allowed
- * to shrink, so the chain — treenode, content wrapper, title — is pinned to the
- * available width here. `:global` because these are antd's own class names.
- */
-/*
  * antd paints the tree with its own `colorBgContainer`, which is close to the
  * sidebar's `--bg-raised` but not equal to it — so the tree showed as a faintly
  * lighter block that stopped wherever the last file was. The sidebar owns the
@@ -74,10 +108,50 @@
  */
 .tree {
   background: transparent;
+  /* The sidebar's inline padding, moved in here — see App.module.css. */
+  padding-left: var(--space-2);
+}
+
+/*
+ * The two rules that make a sticky badge possible.
+ *
+ * `max-content` on the list lets it grow to the longest path, and
+ * `min-width: 100%` keeps it filling the sidebar when every path is short.
+ * Each row then takes `width: 100%` *of that grown list*, so every row is as
+ * wide as the widest one — which is the part that matters: a sticky element
+ * is clamped to its own containing block, so a row only as wide as its own
+ * text has nowhere to pin its badge and the badge just trails the name.
+ */
+.tree :global(.ant-tree-list-holder-inner) {
+  width: max-content;
+  min-width: 100%;
 }
 
 .tree :global(.ant-tree-treenode) {
   width: 100%;
+  background: var(--row-bg);
+}
+
+/*
+ * The row highlight is ours, not antd's. antd paints it on the title alone,
+ * which stops short of the pinned group and leaves a hole in it — and the
+ * pinned group cannot inherit a colour it does not know. Naming the colour in
+ * `--row-bg` lets both read from one place, and moving it up to the treenode
+ * has it span the whole row rather than the text.
+ */
+.tree :global(.ant-tree-treenode) {
+  --row-bg: var(--bg-raised);
+}
+
+.tree :global(.ant-tree-treenode:hover),
+.tree :global(.ant-tree-treenode-selected) {
+  --row-bg: var(--bg-sunk);
+}
+
+.tree :global(.ant-tree-node-content-wrapper),
+.tree :global(.ant-tree-node-content-wrapper:hover),
+.tree :global(.ant-tree-node-content-wrapper.ant-tree-node-selected) {
+  background: transparent;
 }
 
 /*
@@ -97,10 +171,8 @@
 
 .tree :global(.ant-tree-node-content-wrapper) {
   flex: 1;
-  min-width: 0;
 }
 
 .tree :global(.ant-tree-title) {
   display: block;
-  min-width: 0;
 }
