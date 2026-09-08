@@ -44,6 +44,15 @@ async function cli(args: string[]): Promise<CliResult> {
   return parseFramed(stdout);
 }
 
+async function prepare(args: string[] = []): Promise<{ stdout: string; stderr: string }> {
+  return run(process.execPath, [CLI, '--prepare', ...args], { cwd: repo.dir }).catch(
+    (error: { stdout?: string; stderr?: string }) => ({
+      stdout: error.stdout ?? '',
+      stderr: error.stderr ?? '',
+    }),
+  );
+}
+
 beforeAll(async () => {
   await run(process.execPath, ['scripts/build-server.mjs']);
 }, 60_000);
@@ -529,4 +538,68 @@ describe('the CLI', () => {
     const said = state.threads.flatMap((t) => t.messages).filter((m) => m.body === 'why 2?');
     expect(said).toHaveLength(1);
   }, 30_000);
+
+  it('prepares a numbered diff without opening a round or a server', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const { stdout } = await prepare();
+
+    expect(stdout).toContain('range: working tree vs HEAD');
+    expect(stdout).toContain('  old  new');
+    expect(stdout).toContain('== src/auth.ts  modified');
+    expect(stdout).toContain('    .    2  +   return 2;');
+
+    const stateDir = join((await run('git', ['rev-parse', '--absolute-git-dir'], { cwd: repo.dir })).stdout.trim(), 'web-review');
+    expect(await readFile(join(stateDir, 'state.json'), 'utf8').catch(() => null)).toBeNull();
+    expect(await readServerRecord(stateDir)).toBeNull();
+  });
+
+  it('leaves request.json untouched, so a later round still carries it', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+    const stateDir = join((await run('git', ['rev-parse', '--absolute-git-dir'], { cwd: repo.dir })).stdout.trim(), 'web-review');
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, 'request.json'), JSON.stringify({ summary: 'kept' }), 'utf8');
+
+    await prepare();
+
+    expect(await readFile(join(stateDir, 'request.json'), 'utf8')).toContain('kept');
+  });
+
+  it('numbers an untracked file from 1, which git diff never lists', async () => {
+    await repo.write('src/fresh.ts', 'const a = 1;\nconst b = 2;\n');
+
+    const { stdout } = await prepare();
+
+    expect(stdout).toContain('== src/fresh.ts  added');
+    expect(stdout).toContain('    .    1  + const a = 1;');
+  });
+
+  it('says so in plain text, never framed JSON, when the base ref is unknown', async () => {
+    await repo.write('src/auth.ts', 'export function sign() {\n  return 2;\n}\n');
+
+    const { stdout, stderr } = await prepare(['--base', 'no-such-ref']);
+
+    expect(stderr.trim()).toBe('web-review: unknown base ref: no-such-ref');
+    expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
+  });
+
+  it('says so in plain text, never framed JSON, when an unknown flag is combined with --prepare', async () => {
+    const { stdout, stderr } = await prepare(['--wat']);
+
+    expect(stderr.trim()).toBe('web-review: unknown option: --wat');
+    expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
+  });
+
+  it('says so in plain text, never framed JSON, when --timeout is non-numeric under --prepare', async () => {
+    const { stdout, stderr } = await prepare(['--timeout', 'notanumber']);
+
+    expect(stderr.trim()).toBe('web-review: --timeout needs a number');
+    expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
+  });
+
+  it('reports an empty range as plain text', async () => {
+    const { stdout } = await prepare();
+    expect(stdout.trim()).toBe('no changes');
+  });
+
 });
