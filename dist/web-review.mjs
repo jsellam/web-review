@@ -1118,16 +1118,16 @@ async function serveMain(cwd, stateDir) {
 }
 async function waitForResult(stateDir, timeoutSeconds) {
   const deadline = Date.now() + timeoutSeconds * 1e3;
-  while (Date.now() < deadline) {
+  for (; ; ) {
     const raw = await readFile6(join6(stateDir, RESULT_FILE), "utf8").catch(() => null);
     if (raw !== null) {
       const parsed = JSON.parse(raw);
       await rm3(join6(stateDir, RESULT_FILE), { force: true });
       return parsed;
     }
+    if (Date.now() >= deadline) return null;
     await new Promise((resolve3) => setTimeout(resolve3, 250));
   }
-  return null;
 }
 var LOCK_FILE = "server.lock";
 var LOCK_STALE_MS = 1e4;
