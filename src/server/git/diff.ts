@@ -88,9 +88,32 @@ export async function readFileDiff(
   const paths =
     entry.status === 'renamed' && entry.oldPath ? [entry.oldPath, entry.path] : [entry.path];
 
-  const args = range.staged
-    ? ['diff', '--cached', '-M', '-U3', range.base, '--', ...paths]
-    : ['diff', '-M', '-U3', range.base, '--', ...paths];
+  // This is the first code in this repo to parse `git diff`'s human-readable
+  // text rather than `-z` porcelain, so it inherits whatever the invoking
+  // user's ~/.gitconfig says — and several settings there actively corrupt
+  // it: `color.ui=always` ANSI-wraps the `@@` header past what the HUNK regex
+  // matches, `diff.external` replaces the unified-diff output with whatever
+  // that command prints, and `diff.suppressBlankEmpty` turns a blank context
+  // line's leading space into an empty string that `numberHunks` cannot tell
+  // apart from `split('\n')`'s own trailing artefact — silently desyncing
+  // every line number after it. `--no-ext-diff`, `--no-color` and
+  // `--no-textconv` are `git diff` flags; `diff.suppressBlankEmpty` has no
+  // flag, hence the `-c` override, which must precede the `diff` subcommand
+  // to take effect.
+  const args = [
+    '-c',
+    'diff.suppressBlankEmpty=false',
+    'diff',
+    ...(range.staged ? ['--cached'] : []),
+    '--no-ext-diff',
+    '--no-color',
+    '--no-textconv',
+    '-M',
+    '-U3',
+    range.base,
+    '--',
+    ...paths,
+  ];
 
   return gitRaw(args, opts);
 }

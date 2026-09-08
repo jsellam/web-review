@@ -104,8 +104,53 @@ describe('renderPrepare', () => {
     }));
 
     const out = renderPrepare(HEADER, files);
-    expect(out).toContain(`== src/f${big}.ts  modified  +2 -1  — omitted, output limit reached`);
+    expect(out).toContain(
+      `== src/f${big}.ts  modified  +2 -1  — omitted, does not fit the remaining output budget`,
+    );
     expect(out).toContain('== src/f0.ts  modified  +2 -1\n@@');
+  });
+
+  it('packs the total bound greedily: a file after an omitted one still renders if it fits', () => {
+    // The total bound does not latch once it first fires: a `continue` skips
+    // only the file that overflowed, so later files keep being checked
+    // against whatever budget is actually left. That is deliberately better
+    // than a hard stop — it renders strictly more of the diff for the same
+    // bound — but only a total that isn't an exact multiple of the per-file
+    // one can tell the two apart, so the sizes below are engineered rather
+    // than reusing PER_FILE_LIMIT-sized files throughout.
+    const fullFiles = Math.floor(TOTAL_LIMIT / PER_FILE_LIMIT) - 1; // 4, leaving one file's worth of room
+    const slack = TOTAL_LIMIT - fullFiles * PER_FILE_LIMIT; // 400
+    const room = 50; // deliberately less than `slack`, and less than `slack - 10`
+
+    const full = (path: string): PreparedFile => ({
+      entry: entry({ path }),
+      lines: body(SAMPLE, PER_FILE_LIMIT),
+    });
+    const sized = (path: string, n: number): PreparedFile => ({
+      entry: entry({ path }),
+      lines: body(SAMPLE, n),
+    });
+
+    const files: PreparedFile[] = [
+      ...Array.from({ length: fullFiles }, (_, i) => full(`src/f${i}.ts`)),
+      // The last file that still fits: `slack - room` lines land exactly
+      // `room` lines short of the total bound.
+      sized('src/last-fit.ts', slack - room),
+      // Bigger than the `room` left, but well under PER_FILE_LIMIT on its
+      // own, so this trips the total bound, not the per-file one.
+      sized('src/too-big-for-remainder.ts', room + 10),
+      // Small enough to fit in the `room` the file above could not use. A
+      // latch would omit this too, since it comes after the first overflow.
+      sized('src/small-trailer.ts', room - 10),
+    ];
+
+    const out = renderPrepare(HEADER, files);
+
+    expect(out).toContain('== src/last-fit.ts  modified  +2 -1\n@@');
+    expect(out).toContain(
+      '== src/too-big-for-remainder.ts  modified  +2 -1  — omitted, does not fit the remaining output budget',
+    );
+    expect(out).toContain('== src/small-trailer.ts  modified  +2 -1\n@@');
   });
 
   it('pluralises the file count', () => {

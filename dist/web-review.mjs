@@ -286,7 +286,20 @@ function numberHunks(text) {
 }
 async function readFileDiff(entry, range, opts) {
   const paths = entry.status === "renamed" && entry.oldPath ? [entry.oldPath, entry.path] : [entry.path];
-  const args = range.staged ? ["diff", "--cached", "-M", "-U3", range.base, "--", ...paths] : ["diff", "-M", "-U3", range.base, "--", ...paths];
+  const args = [
+    "-c",
+    "diff.suppressBlankEmpty=false",
+    "diff",
+    ...range.staged ? ["--cached"] : [],
+    "--no-ext-diff",
+    "--no-color",
+    "--no-textconv",
+    "-M",
+    "-U3",
+    range.base,
+    "--",
+    ...paths
+  ];
   return gitRaw(args, opts);
 }
 
@@ -376,6 +389,7 @@ function header(entry, note = "") {
   return `== ${entry.path}  ${statusLabel(entry)}  ${body}${note}`;
 }
 var SHA = /^[0-9a-f]{40}$/;
+var TOO_LARGE_NOTE = "  \u2014 too large, truncated; read the file yourself if you need it";
 function renderPrepare(range, files) {
   const base = SHA.test(range.base) ? range.base.slice(0, 7) : range.base;
   const noun = files.length === 1 ? "file" : "files";
@@ -388,15 +402,15 @@ function renderPrepare(range, files) {
   let used = 0;
   for (const { entry, lines } of files) {
     if (lines === null) {
-      out.push(header(entry, entry.binary ? "" : "  \u2014 too large, truncated; read the file yourself if you need it"));
+      out.push(header(entry, entry.binary ? "" : TOO_LARGE_NOTE));
       continue;
     }
     if (lines.length > PER_FILE_LIMIT) {
-      out.push(header(entry, "  \u2014 too large, truncated; read the file yourself if you need it"));
+      out.push(header(entry, TOO_LARGE_NOTE));
       continue;
     }
     if (used + lines.length > TOTAL_LIMIT) {
-      out.push(header(entry, "  \u2014 omitted, output limit reached"));
+      out.push(header(entry, "  \u2014 omitted, does not fit the remaining output budget"));
       continue;
     }
     out.push(header(entry), ...lines.map(renderLine));
@@ -1149,9 +1163,9 @@ async function prepareMain(root, options) {
   }
   emitText(renderPrepare(range, prepared));
 }
+var wantsPrepare = process.argv.slice(2).includes("--prepare");
 async function main() {
   const argv = process.argv.slice(2);
-  const wantsPrepare = argv.includes("--prepare");
   let options;
   try {
     options = parseArgs(argv);
@@ -1297,7 +1311,7 @@ function isEntryPoint() {
 }
 if (isEntryPoint()) {
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => emit(abortedResult(), 130));
+    process.on(signal, () => wantsPrepare ? process.exit(130) : emit(abortedResult(), 130));
   }
   main().catch((error) => {
     emit(errorResult(error instanceof Error ? error.message : "unexpected error"), 1);

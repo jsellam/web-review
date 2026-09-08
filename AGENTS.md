@@ -37,7 +37,15 @@ Run a human code review of your own changes and act on the result.
 
    This is read-only: it opens no review and can be run at any time. A file
    that is binary or very large is shown as a header only, and says so —
-   read that one yourself if you need it.
+   read that one yourself if you need it. A file well within that limit can
+   still come out as a header only, marked `— omitted, does not fit the
+   remaining output budget`, once the total output grows too large; a
+   bodyless header does not by itself mean the file is unchanged, so check
+   the note next to it. A renamed file is headed by its **new** path
+   (`== src/new.ts  renamed from src/old.ts`) — always put that new path in
+   `file`, on both sides; the old path still anchors the comment, but the
+   browser keys threads by the new path and filters out anything else, so the
+   comment would silently never appear.
 
 2. Write `<git-dir>/web-review/request.json` describing what you did, where
    `<git-dir>` is what `git rev-parse --absolute-git-dir` prints. Resolve it;

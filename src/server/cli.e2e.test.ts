@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -601,4 +601,43 @@ describe('the CLI', () => {
     const { stdout } = await prepare();
     expect(stdout.trim()).toBe('no changes');
   });
+
+  it('exits bare on SIGINT under --prepare, never a framed result', async () => {
+    // `--prepare` diffs one file at a time by shelling out to `git diff` per
+    // file, which on enough files is a genuinely observable window — a
+    // harness timeout kill, or a Ctrl-C on a big repository. 100 files makes
+    // that loop take a few seconds end to end (measured locally), which is
+    // wide enough margin for a fixed delay below to land reliably inside it
+    // without racing Node's own startup — a handful of small files was tried
+    // first and was NOT reliable: the whole run finished in well under 100ms,
+    // so a short delay just as often lands after the process has already
+    // exited normally as during the loop.
+    for (let i = 0; i < 100; i += 1) {
+      await repo.write(`src/f${i}.ts`, `export const v${i} = ${i};\n`);
+    }
+    await repo.commit('many files');
+    for (let i = 0; i < 100; i += 1) {
+      await repo.write(`src/f${i}.ts`, `export const v${i} = ${i + 1};\n`);
+    }
+
+    const child = spawn(process.execPath, [CLI, '--prepare'], { cwd: repo.dir });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    // 300ms: comfortably after module load and signal-handler installation
+    // (both near-instant), and comfortably before the ~3s this diff loop
+    // takes to finish on its own — so the signal reliably lands mid-loop,
+    // with nothing written to stdout yet, rather than racing either edge.
+    await new Promise((r) => setTimeout(r, 300));
+    child.kill('SIGINT');
+
+    const [code] = await new Promise<[number | null]>((resolvePromise) => {
+      child.on('exit', (exitCode) => resolvePromise([exitCode]));
+    });
+
+    expect(stdout).not.toContain('<<<WEB_REVIEW_RESULT');
+    expect(code).toBe(130);
+  }, 20_000);
 });

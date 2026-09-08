@@ -56,8 +56,13 @@ resolution and exits.
 The range comes from `resolveRange(options.base)` — `auto` by default. Note
 that `main()`'s normal path prefers `request.base` over `auto`, and
 `request.json` does not exist yet at prepare time. An agent that intends to
-set `request.base` must pass the same ref here as `--base`. This is documented
-in `SKILL.md`, not worked around.
+set `request.base` must pass the same ref here as `--base`. This is not
+documented anywhere — `--base`, `--staged` and `request.base` appear in no
+agent-facing doc (`SKILL.md`, `AGENTS.md`, `README.md`) — and that is
+deliberate rather than an oversight: `base` is undocumented by design, so a
+doc-following agent never sets `request.base` in the first place, leaves both
+it and `--prepare` at `auto`, and the two agree without either needing to
+know the other exists.
 
 **Output is plain text on stdout — deliberately not framed JSON.** The frame
 carries a `CliResult`, and `--prepare` produces no round. More concretely, a
@@ -123,8 +128,15 @@ more expensive than the greps it replaces.
   Checked twice: against `additions + deletions` before the file is diffed at
   all, and against the rendered line count afterwards, which context lines can
   push over the bound on their own.
-- **Total**, over 2000 diff lines — every remaining file as a header plus
-  `— omitted, output limit reached`
+- **Total**, over 2000 diff lines — packed greedily, not a hard stop: a file
+  is skipped once it would push the running total over the bound, as a header
+  plus `— omitted, does not fit the remaining output budget`, but files after
+  it are still checked against whatever budget remains and rendered in full
+  if they fit. This renders strictly more of the diff for the same bound than
+  stopping at the first file that overflows would, at the cost of the note
+  being a statement about that one file rather than a claim that output has
+  ended — which is also why it says "does not fit the remaining output
+  budget" rather than "output limit reached".
 
 There is deliberately **no path-based rule** for generated directories. The
 per-file bound already handles them: a bundle diff is large, so it truncates to

@@ -384,6 +384,16 @@ async function prepareMain(root: string, options: CliOptions): Promise<void> {
   emitText(renderPrepare(range, prepared));
 }
 
+/**
+ * Whether this invocation is asking for `--prepare`, decided from raw argv
+ * rather than a parsed `CliOptions`. Two callers need this before an options
+ * object can exist at all: `main()` itself, because `parseArgs` can throw
+ * before producing one, and the signal handlers installed at module load
+ * below them, which run even earlier — before `main()` has read anything.
+ * Hoisted to module scope so both see the same answer.
+ */
+const wantsPrepare = process.argv.slice(2).includes('--prepare');
+
 async function main(): Promise<void> {
   // `--prepare` promises plain text on every path, but parseArgs itself can
   // throw — an unknown flag, a non-numeric --timeout — before there is an
@@ -391,7 +401,6 @@ async function main(): Promise<void> {
   // bad invocation of this mode cannot fall through to the framed result the
   // top-level handler would otherwise print.
   const argv = process.argv.slice(2);
-  const wantsPrepare = argv.includes('--prepare');
 
   let options: CliOptions;
   try {
@@ -648,9 +657,17 @@ if (isEntryPoint()) {
    * A cancelled review must never reach the agent as silence, which it could
    * mistake for approval. Print an explicit `aborted` and leave the detached
    * server running so re-running the command re-attaches.
+   *
+   * `--prepare` opens no round and has nothing to abort — it just shells out
+   * to `git diff` per file, which on a large repository is a real window for
+   * a harness timeout kill or a Ctrl-C to land in. That mode's whole contract
+   * is plain text on every path; printing a framed `<<<WEB_REVIEW_RESULT>>>`
+   * envelope here would breach it for the one signal-driven exit the rest of
+   * this file doesn't already special-case. Exit bare instead, the same code
+   * either way, so an agent piping this output never has to handle two shapes.
    */
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-    process.on(signal, () => emit(abortedResult(), 130));
+    process.on(signal, () => (wantsPrepare ? process.exit(130) : emit(abortedResult(), 130)));
   }
 
   main().catch((error: unknown) => {

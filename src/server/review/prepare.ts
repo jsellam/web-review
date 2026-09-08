@@ -90,6 +90,14 @@ function header(entry: FileEntry, note = ''): string {
 const SHA = /^[0-9a-f]{40}$/;
 
 /**
+ * Shared by both places a file is too large to render on its own: caught
+ * up front by `isTooLarge` (before it is ever diffed) and caught again here
+ * against the rendered line count, which context lines can push over the
+ * bound by themselves. One constant so the two branches cannot drift apart.
+ */
+const TOO_LARGE_NOTE = '  — too large, truncated; read the file yourself if you need it';
+
+/**
  * The whole `--prepare` output. Pure: every bound is applied here, and every
  * bound that fires says so on the file it applies to. Nothing is ever
  * withheld silently.
@@ -111,15 +119,21 @@ export function renderPrepare(
   let used = 0;
   for (const { entry, lines } of files) {
     if (lines === null) {
-      out.push(header(entry, entry.binary ? '' : '  — too large, truncated; read the file yourself if you need it'));
+      out.push(header(entry, entry.binary ? '' : TOO_LARGE_NOTE));
       continue;
     }
     if (lines.length > PER_FILE_LIMIT) {
-      out.push(header(entry, '  — too large, truncated; read the file yourself if you need it'));
+      out.push(header(entry, TOO_LARGE_NOTE));
       continue;
     }
     if (used + lines.length > TOTAL_LIMIT) {
-      out.push(header(entry, '  — omitted, output limit reached'));
+      // `continue` rather than a latch: a file that no longer fits does not
+      // stop the loop, so a smaller file further down the list that DOES
+      // still fit is still rendered — greedy packing beats a hard stop at
+      // the first file that overflows. The note says so truthfully: this
+      // file didn't fit the *remaining* budget, not that output as a whole
+      // has ended.
+      out.push(header(entry, '  — omitted, does not fit the remaining output budget'));
       continue;
     }
 

@@ -145,4 +145,42 @@ describe('readFileDiff', () => {
     const numbered = numberHunks(await readFileDiff(keep, range, { cwd: repo.dir }));
     expect(numbered).toContainEqual({ kind: 'add', old: null, new: 2, text: 'const b = 7;' });
   });
+
+  it('numbers correctly regardless of the user\'s ~/.gitconfig', async () => {
+    // `readFileDiff` parses git's human-readable text, not `-z` porcelain, so
+    // it inherits whatever the invoking user's config says. Three settings
+    // are each independently capable of corrupting it: `color.ui=always`
+    // ANSI-wraps the `@@` header so the HUNK regex misses it; `diff.external`
+    // replaces the whole diff engine, so there is no unified-diff text at
+    // all; `diff.suppressBlankEmpty=true` turns a blank context line's
+    // leading space into an empty string, which is indistinguishable from
+    // `split('\n')`'s trailing artefact and silently desyncs every line
+    // number after it. All three are set at once here, because a real
+    // `~/.gitconfig` in the wild often carries more than one of them.
+    await repo.run('config', 'color.ui', 'always');
+    await repo.run('config', 'diff.external', 'echo');
+    await repo.run('config', 'diff.suppressBlankEmpty', 'true');
+
+    // A blank context line (line 2) is the specific case suppressBlankEmpty
+    // corrupts: only a genuinely empty line reveals the difference between
+    // "git wrote a single space" and "git wrote nothing at all".
+    await repo.write('src/blank.ts', 'const a = 1;\n\nconst b = 2;\nconst c = 3;\n');
+    await repo.commit('add blank.ts');
+    await repo.write('src/blank.ts', 'const a = 1;\n\nconst b = 2;\nconst c = 4;\n');
+    await repo.commit('change c');
+
+    const range = await resolveRange('HEAD~1', { cwd: repo.dir });
+    const files = await listChangedFiles(range, { cwd: repo.dir });
+    const blank = files.find((f) => f.path === 'src/blank.ts')!;
+
+    const numbered = numberHunks(await readFileDiff(blank, range, { cwd: repo.dir }));
+    expect(numbered).toEqual([
+      { kind: 'hunk', old: null, new: null, text: '@@ -1,4 +1,4 @@' },
+      { kind: 'context', old: 1, new: 1, text: 'const a = 1;' },
+      { kind: 'context', old: 2, new: 2, text: '' },
+      { kind: 'context', old: 3, new: 3, text: 'const b = 2;' },
+      { kind: 'del', old: 4, new: null, text: 'const c = 3;' },
+      { kind: 'add', old: null, new: 4, text: 'const c = 4;' },
+    ]);
+  });
 });
