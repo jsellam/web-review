@@ -44,7 +44,7 @@ describe('resolveRange', () => {
     const range = await resolveRange('auto', { cwd: repo.dir });
     const mergeBase = await git(['merge-base', 'main', 'HEAD'], { cwd: repo.dir });
 
-    expect(range).toEqual({ base: mergeBase, label: 'branch vs main', staged: false });
+    expect(range).toEqual({ base: mergeBase, label: 'feature vs main', staged: false });
   });
 
   it('auto falls back to HEAD when the default branch shares no history', async () => {
@@ -66,7 +66,19 @@ describe('resolveRange', () => {
 
     expect(range.base).toBe(mergeBase);
     expect(range.staged).toBe(false);
-    expect(range.label).toBe('branch vs main');
+    expect(range.label).toBe('feature vs main');
+  });
+
+  it('names a detached HEAD by its short sha, having no branch name to use', async () => {
+    await repo.run('checkout', '-b', 'feature');
+    await repo.write('b.txt', 'new\n');
+    await repo.commit('add b');
+    await repo.run('checkout', '--detach');
+
+    const range = await resolveRange('auto', { cwd: repo.dir });
+    const short = await git(['rev-parse', '--short', 'HEAD'], { cwd: repo.dir });
+
+    expect(range.label).toBe(`${short} vs main`);
   });
 
   it('staged compares the index against HEAD', async () => {

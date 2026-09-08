@@ -85,6 +85,11 @@ async function resolveRange(spec, opts) {
   const base = await git(["rev-parse", spec], opts);
   return { base, label: `working tree vs ${spec}`, staged: false };
 }
+async function headLabel(opts) {
+  const branch = await git(["symbolic-ref", "--short", "-q", "HEAD"], opts).catch(() => null);
+  if (branch) return branch;
+  return await git(["rev-parse", "--short", "HEAD"], opts).catch(() => null) ?? "HEAD";
+}
 async function branchBase(opts) {
   const branch = await detectDefaultBranch(opts);
   if (!branch) return null;
@@ -92,7 +97,7 @@ async function branchBase(opts) {
   if (base === null) return null;
   const head = await git(["rev-parse", "HEAD"], opts).catch(() => null);
   if (base === head) return null;
-  return { base, label: `branch vs ${branch}`, staged: false };
+  return { base, label: `${await headLabel(opts)} vs ${branch}`, staged: false };
 }
 
 // src/server/git/files.ts
