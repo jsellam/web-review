@@ -28,8 +28,29 @@ describe('git', () => {
 });
 
 describe('resolveRange', () => {
-  it('auto picks HEAD when the working tree is dirty', async () => {
+  it('auto picks HEAD on the default branch itself, dirty or not', async () => {
     await repo.write('a.txt', 'two\n');
+
+    expect(await resolveRange('auto', { cwd: repo.dir }))
+      .toEqual({ base: 'HEAD', label: 'working tree vs HEAD', staged: false });
+  });
+
+  it('auto keeps the branch base when the branch is ahead and dirty', async () => {
+    await repo.run('checkout', '-b', 'feature');
+    await repo.write('b.txt', 'new\n');
+    await repo.commit('add b');
+    await repo.write('c.txt', 'uncommitted\n');
+
+    const range = await resolveRange('auto', { cwd: repo.dir });
+    const mergeBase = await git(['merge-base', 'main', 'HEAD'], { cwd: repo.dir });
+
+    expect(range).toEqual({ base: mergeBase, label: 'branch vs main', staged: false });
+  });
+
+  it('auto falls back to HEAD when the default branch shares no history', async () => {
+    await repo.run('checkout', '--orphan', 'orphan');
+    await repo.write('b.txt', 'new\n');
+    await repo.commit('unrelated');
 
     expect(await resolveRange('auto', { cwd: repo.dir }))
       .toEqual({ base: 'HEAD', label: 'working tree vs HEAD', staged: false });

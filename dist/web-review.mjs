@@ -62,9 +62,6 @@ async function gitDir(opts) {
 
 // src/server/git/range.ts
 var DEFAULT_BRANCH_CANDIDATES = ["main", "master", "develop"];
-async function isDirty(opts) {
-  return (await git(["status", "--porcelain"], opts)).trim().length > 0;
-}
 async function detectDefaultBranch(opts) {
   for (const candidate of DEFAULT_BRANCH_CANDIDATES) {
     if (await gitOk(["rev-parse", "--verify", "--quiet", candidate], opts)) return candidate;
@@ -79,21 +76,23 @@ async function resolveRange(spec, opts) {
     return { base: "HEAD", label: "working tree vs HEAD", staged: false };
   }
   if (spec === "auto") {
-    if (await isDirty(opts)) {
-      return { base: "HEAD", label: "working tree vs HEAD", staged: false };
-    }
-    const branch = await detectDefaultBranch(opts);
-    if (!branch) {
-      return { base: "HEAD", label: "working tree vs HEAD", staged: false };
-    }
-    const base2 = await git(["merge-base", branch, "HEAD"], opts);
-    return { base: base2, label: `branch vs ${branch}`, staged: false };
+    const base2 = await branchBase(opts);
+    return base2 ?? { base: "HEAD", label: "working tree vs HEAD", staged: false };
   }
   if (!await gitOk(["rev-parse", "--verify", "--quiet", `${spec}^{commit}`], opts)) {
     throw new Error(`web-review: unknown base ref: ${spec}`);
   }
   const base = await git(["rev-parse", spec], opts);
   return { base, label: `working tree vs ${spec}`, staged: false };
+}
+async function branchBase(opts) {
+  const branch = await detectDefaultBranch(opts);
+  if (!branch) return null;
+  const base = await git(["merge-base", branch, "HEAD"], opts).catch(() => null);
+  if (base === null) return null;
+  const head = await git(["rev-parse", "HEAD"], opts).catch(() => null);
+  if (base === head) return null;
+  return { base, label: `branch vs ${branch}`, staged: false };
 }
 
 // src/server/git/files.ts
